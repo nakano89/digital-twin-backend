@@ -175,4 +175,4 @@ WebSocket接続の終了（切断）は、クライアント・本サーバー�
 
 ## クライアントの実装例
 
-本サーバーと通信するクライアントの実装例については、[Pyxelクライアント（バックエンドサーバー検証用）](https://github.com/nakano89/digital-twin-pyxel-client)を参照してください。
+本サーバーと通信するクライアントの実装例については、[Pyxelクライアント（バックエンドサーバー検証用）](https://github.com/nakano89/digital-twin-pyxel-client)を参照してください。こちらのソースコードなどは、クライアント実装にあたって参考になると思います。
