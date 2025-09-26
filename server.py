@@ -151,7 +151,7 @@ async def handler(connection):
             hp_decrease = await Visitors.try_decrease_hp(visitor_id, try_hp_decrease)
             Players.increase_score(connection, hp_decrease)
         for player_name, try_hp_decrease in loaded["decreased_players_hp"].items():
-            hp_decrease = Players.try_decrease_hp(player_name, try_hp_decrease)
+            hp_decrease = await Players.try_decrease_hp(player_name, try_hp_decrease)
             Players.increase_score(connection, hp_decrease)
 
         await asyncio.sleep(0.01)
