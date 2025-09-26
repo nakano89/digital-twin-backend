@@ -20,8 +20,8 @@ class Visitors:
     _existing_visitors_id = []
 
     @classmethod
-    def update_existing_visitors(cls, id_):
-        cls._existing_visitors_id = id_
+    def update_existing_visitors(cls, ids_):
+        cls._existing_visitors_id = ids_
 
     @classmethod
     def get_hp(cls, id_):
@@ -39,6 +39,7 @@ class Visitors:
             return 0
 
         if cls._visitors_hp[id_] <= try_decrease:
+            decrease = cls._visitors_hp[id_]
             cls._visitors_hp[id_] = 0
 
             async def revival(id_):
@@ -46,7 +47,7 @@ class Visitors:
                 del Visitors._visitors_hp[id_]
 
             await asyncio.create_task(revival(id_))
-            return cls._visitors_hp[id_]
+            return decrease
         else:
             cls._visitors_hp[id_] -= try_decrease
             return try_decrease
@@ -97,6 +98,7 @@ class Players:
         for c in cls.server.connections:
             if c.user_name == name:
                 if c.user_hp <= try_decrease:
+                    decrease = c.user_hp
                     c.user_hp = 0
 
                     async def revival(name):
@@ -107,7 +109,7 @@ class Players:
                                 break
 
                     await asyncio.create_task(revival(name))
-                    return c.user_hp
+                    return decrease
                 else:
                     c.user_hp -= try_decrease
                     return try_decrease
