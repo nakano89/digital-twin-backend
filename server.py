@@ -31,7 +31,7 @@ class Visitors:
         return cls._visitors_hp[id_]
 
     @classmethod
-    async def try_decrease_hp(cls, id_, try_decrease):
+    def try_decrease_hp(cls, id_, try_decrease):
         if id_ not in cls._visitors_hp:
             cls._visitors_hp[id_] = 100
 
@@ -42,11 +42,6 @@ class Visitors:
             decrease = cls._visitors_hp[id_]
             cls._visitors_hp[id_] = 0
 
-            async def revival(id_):
-                await asyncio.sleep(60 * 3)
-                del Visitors._visitors_hp[id_]
-
-            await asyncio.create_task(revival(id_))
             return decrease
         else:
             cls._visitors_hp[id_] -= try_decrease
@@ -94,21 +89,13 @@ class Players:
         connection.user_speed = speed
 
     @classmethod
-    async def try_decrease_hp(cls, name, try_decrease):
+    def try_decrease_hp(cls, name, try_decrease):
         for c in cls.server.connections:
             if c.user_name == name:
                 if c.user_hp <= try_decrease:
                     decrease = c.user_hp
                     c.user_hp = 0
 
-                    async def revival(name):
-                        await asyncio.sleep(60 * 3)
-                        for c in cls.server.connections:
-                            if c.user_name == name:
-                                c.user_hp = 100
-                                break
-
-                    await asyncio.create_task(revival(name))
                     return decrease
                 else:
                     c.user_hp -= try_decrease
@@ -150,10 +137,10 @@ async def handler(connection):
             return
 
         for visitor_id, try_hp_decrease in loaded["decreased_visitors_hp"].items():
-            hp_decrease = await Visitors.try_decrease_hp(visitor_id, try_hp_decrease)
+            hp_decrease = Visitors.try_decrease_hp(visitor_id, try_hp_decrease)
             Players.increase_score(connection, hp_decrease)
         for player_name, try_hp_decrease in loaded["decreased_players_hp"].items():
-            hp_decrease = await Players.try_decrease_hp(player_name, try_hp_decrease)
+            hp_decrease = Players.try_decrease_hp(player_name, try_hp_decrease)
             Players.increase_score(connection, hp_decrease)
 
         await asyncio.sleep(0.01)
