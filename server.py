@@ -14,10 +14,110 @@ origin_lon = 139.426989
 meter_per_1lat = 0.00000901325
 meter_per_1lon = 0.0000110065
 
-server = None
-lastest_lidar_date = datetime.datetime.now(ZoneInfo("Asia/Tokyo"))
-touched_visitors_id = set()
-lastest_received_visitors_id = set()
+
+class Visitors:
+    _visitors_hp = {}
+    _existing_visitors_id = []
+
+    @classmethod
+    def update_existing_visitors(cls, id_):
+        cls._existing_visitors_id = id_
+
+    @classmethod
+    def get_hp(cls, id_):
+        if id_ not in cls._visitors_hp:
+            cls._visitors_hp[id_] = 100
+
+        return cls._visitors_hp[id_]
+
+    @classmethod
+    async def try_decrease_hp(cls, id_, try_decrease):
+        if id_ not in cls._visitors_hp:
+            cls._visitors_hp[id_] = 100
+
+        if id_ not in cls._existing_visitors_id:
+            return 0
+
+        if cls._visitors_hp[id_] <= try_decrease:
+            cls._visitors_hp[id_] = 0
+
+            async def revival(id_):
+                await asyncio.sleep(60 * 3)
+                del Visitors._visitors_hp[id_]
+
+            await asyncio.create_task(revival(id_))
+            return cls._visitors_hp[id_]
+        else:
+            cls._visitors_hp[id_] -= try_decrease
+            return try_decrease
+
+
+class Players:
+    _server = None
+
+    @classmethod
+    def init_class(cls, server):
+        cls._server = server
+
+    def get_all_players_data(cls):
+        return [
+            {
+                "type": c.user_type,
+                "name": c.user_name,
+                "score": c.user_score,
+                "hp": c.user_hp,
+                "x": c.user_x,
+                "y": c.user_y,
+                "angle": c.user_angle,
+                "speed": c.user_speed,
+            }
+            for c in cls._server.connections
+        ]
+
+    @classmethod
+    def init(cls, connection, name, type_):
+        assert name != ""
+        for c in cls._server.connections:
+            assert name != c.user_name
+        connection.user_name = name
+        connection.user_type = type_
+        connection.user_score = 0
+        connection.user_hp = 100
+
+    @classmethod
+    def get_hp(cls, connection):
+        return connection.user_hp
+
+    @classmethod
+    def set_property(cls, connection, x, y, angle, speed):
+        connection.user_x = x
+        connection.user_y = y
+        connection.user_angle = angle
+        connection.user_speed = speed
+
+    @classmethod
+    async def try_decrease_hp(cls, name, try_decrease):
+        for c in cls._server.connections:
+            if c.user_name == name:
+                if c.user_hp <= try_decrease:
+                    c.user_hp = 0
+
+                    async def revival(name):
+                        await asyncio.sleep(60 * 3)
+                        for c in cls._server.connections:
+                            if c.user_name == name:
+                                c.user_hp = 100
+                                break
+
+                    await asyncio.create_task(revival(name))
+                    return c.user_hp
+                else:
+                    c.user_hp -= try_decrease
+                    return try_decrease
+
+    @classmethod
+    def increase_score(cls, connection, increase):
+        connection.user_score += increase
 
 
 async def handler(connection):
@@ -31,26 +131,36 @@ async def handler(connection):
             loaded = json.loads(received)
             assert type(loaded["x"]) in (int, float)
             assert type(loaded["y"]) in (int, float)
-            for visitor in loaded["visitors_being_touched"]:
-                assert type(visitor) is int
+            assert type(loaded["angle"]) in (int, float)
+            assert type(loaded["speed"]) in (int, float)
+            for visitor_id, try_hp_decrease in loaded["decreased_visitors_hp"].items():
+                assert type(visitor_id) is str
+                assert type(try_hp_decrease) is int
+            for player_name, try_hp_decrease in loaded["decreased_players_hp"].items():
+                assert type(player_name) is str
+                assert type(try_hp_decrease) is int
         except:
             await connection.close(code=1008, reason="Invalid Message")
             return
 
-        connection.user_x = loaded["x"]
-        connection.user_y = loaded["y"]
-        for visitor in loaded["visitors_being_touched"]:
-            if visitor in (lastest_received_visitors_id - touched_visitors_id):
-                connection.user_score += 1
-                touched_visitors_id.add(visitor)
+        Players.set_property(
+            connection, loaded["x"], loaded["y"], loaded["angle"], loaded["speed"]
+        )
+
+        if Players.get_hp(connection) == 0:
+            return
+
+        for visitor_id, try_hp_decrease in loaded["decreased_visitors_hp"].items():
+            hp_decrease = await Visitors.try_decrease_hp(visitor_id, try_hp_decrease)
+            Players.increase_score(connection, hp_decrease)
+        for player_name, try_hp_decrease in loaded["decreased_players_hp"].items():
+            hp_decrease = Players.try_decrease_hp(player_name, try_hp_decrease)
+            Players.increase_score(connection, hp_decrease)
 
         await asyncio.sleep(0.01)
 
 
 async def broadcast_json(lidar2person_queue):
-    global lastest_lidar_date
-    global touched_visitors_id
-    global lastest_received_visitors_id
     while True:
         try:
             lidar2person = lidar2person_queue.get(False)
@@ -60,31 +170,23 @@ async def broadcast_json(lidar2person_queue):
 
         loaded = json.loads(lidar2person)
 
-        now_lidar_date = datetime.datetime.fromisoformat(loaded["latest_timestamp"])
-        if now_lidar_date < lastest_lidar_date:
-            touched_visitors_id = set()
-        lastest_lidar_date = now_lidar_date
-
-        lastest_received_visitors_id = {x["id"] for x in loaded["objects"]}
+        Visitors.update_existing_visitors([o["id"] for o in loaded["objects"]])
 
         visitors = [
             {
-                "id": x["id"],
-                "x": (x["position"]["lon"] - origin_lon) / meter_per_1lon,
-                "y": (x["position"]["lat"] - origin_lat) / meter_per_1lat,
+                "id": str(o["id"]),
+                "hp": Visitors.get_hp(str(o["id"])),
+                "x": (o["position"]["lon"] - origin_lon) / meter_per_1lon,
+                "y": (o["position"]["lat"] - origin_lat) / meter_per_1lat,
+                "angle": o["heading"],
+                "speed": o["horizontal_speed"],
             }
-            for x in loaded["objects"]
+            for o in loaded["objects"]
         ]
-        untouched_visitors = [x for x in visitors if x["id"] not in touched_visitors_id]
-        touched_visitors = [x for x in visitors if x["id"] in touched_visitors_id]
-        players = [
-            {"name": x.user_name, "x": x.user_x, "y": x.user_y, "score": x.user_score}
-            for x in server.connections
-        ]
+        players = Players.get_all_players_data()
         sending_data = {
             "lidar_time": loaded["latest_timestamp"],
-            "untouched_visitors": untouched_visitors,
-            "touched_visitors": touched_visitors,
+            "visitors": visitors,
             "players": players,
         }
         broadcast(server.connections, json.dumps(sending_data))
@@ -97,16 +199,20 @@ def process_request(connection, request):
         return connection.respond(http.HTTPStatus.OK, "OK\n")
 
     try:
-        assert request.headers["digitaltwin-user-name"] != ""
-        for c in server.connections:
-            assert c.user_name != request.headers["digitaltwin-user-name"]
-        connection.user_name = request.headers["digitaltwin-user-name"]
-        connection.user_x = float(request.headers["digitaltwin-user-x"])
-        connection.user_y = float(request.headers["digitaltwin-user-y"])
+        Players.init(
+            connection,
+            request.headers["digitaltwin-user-name"],
+            request.headers["digitaltwin-user-type"],
+        )
+        Players.set_property(
+            connection,
+            float(request.headers["digitaltwin-user-x"]),
+            float(request.headers["digitaltwin-user-y"]),
+            float(request.headers["digitaltwin-user-angle"]),
+            float(request.headers["digitaltwin-user-speed"]),
+        )
     except:
         return connection.respond(http.HTTPStatus.BAD_REQUEST, "Invalid Request\n")
-
-    connection.user_score = 0
 
 
 async def websocket_async(lidar2person_queue):
