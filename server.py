@@ -53,11 +53,7 @@ class Visitors:
 
 
 class Players:
-    _server = None
-
-    @classmethod
-    def init_class(cls, server):
-        cls._server = server
+    server = None
 
     @classmethod
     def get_all_players_data(cls):
@@ -72,13 +68,13 @@ class Players:
                 "angle": c.user_angle,
                 "speed": c.user_speed,
             }
-            for c in cls._server.connections
+            for c in cls.server.connections
         ]
 
     @classmethod
     def init(cls, connection, name, type_):
         assert name != ""
-        for c in cls._server.connections:
+        for c in cls.server.connections:
             assert name != c.user_name
         connection.user_name = name
         connection.user_type = type_
@@ -98,14 +94,14 @@ class Players:
 
     @classmethod
     async def try_decrease_hp(cls, name, try_decrease):
-        for c in cls._server.connections:
+        for c in cls.server.connections:
             if c.user_name == name:
                 if c.user_hp <= try_decrease:
                     c.user_hp = 0
 
                     async def revival(name):
                         await asyncio.sleep(60 * 3)
-                        for c in cls._server.connections:
+                        for c in cls.server.connections:
                             if c.user_name == name:
                                 c.user_hp = 100
                                 break
@@ -190,7 +186,7 @@ async def broadcast_json(lidar2person_queue):
             "visitors": visitors,
             "players": players,
         }
-        broadcast(server.connections, json.dumps(sending_data))
+        broadcast(Players.server.connections, json.dumps(sending_data))
 
         await asyncio.sleep(0.001)
 
@@ -217,9 +213,8 @@ def process_request(connection, request):
 
 
 async def websocket_async(lidar2person_queue):
-    global server
-    async with serve(handler, port=8000, process_request=process_request) as s:
-        server = s
+    async with serve(handler, port=8000, process_request=process_request) as server:
+        Players.server = server
         await broadcast_json(lidar2person_queue)
 
 
