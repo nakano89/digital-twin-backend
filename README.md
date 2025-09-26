@@ -1,3 +1,5 @@
+本リポジトリのmainブランチは、初期の実装です。次期の実装については、[nextブランチ](https://github.com/nakano89/digital-twin-backend/tree/next)を参照してください。
+
 # バックエンドサーバー
 
 ## 特プロ（デジタルツイン）Cグループ
