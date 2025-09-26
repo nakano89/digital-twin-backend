@@ -59,6 +59,7 @@ class Players:
     def init_class(cls, server):
         cls._server = server
 
+    @classmethod
     def get_all_players_data(cls):
         return [
             {
