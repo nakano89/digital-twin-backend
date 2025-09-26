@@ -167,7 +167,7 @@ async def broadcast_json(lidar2person_queue):
 
         loaded = json.loads(lidar2person)
 
-        Visitors.update_existing_visitors([o["id"] for o in loaded["objects"]])
+        Visitors.update_existing_visitors([str(o["id"]) for o in loaded["objects"]])
 
         visitors = [
             {
