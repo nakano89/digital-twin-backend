@@ -19,6 +19,31 @@ lastest_lidar_date = datetime.datetime.now(ZoneInfo("Asia/Tokyo"))
 touched_visitors_id = set()
 lastest_received_visitors_id = set()
 
+DIGITS = 3
+
+
+def round_digits(x):
+    return float(f"{x:.f}")
+
+
+class Player:
+    def __init__(self):
+        self.user_name = ""
+        self.user_x = 0
+        self.user_y = 0
+        self.user_score = 0
+
+
+class Visitor:
+    def __init__(self, id, lon, lat, alt, heading, vh, vxy):
+        self.id = id
+        self.x = round_digits((lon - origin_lon) / meter_per_1lon)
+        self.y = round_digits((lat - origin_lat) / meter_per_1lat)
+        self.h = round_digits(alt - origin_alt)
+        self.heading = round_digits(heading)
+        self.vh = round_digits(vh)
+        self.vxy = round_digits(vxy)
+
 
 async def handler(connection):
     while True:
@@ -60,25 +85,23 @@ async def broadcast_json(lidar2person_queue):
 
         loaded = json.loads(lidar2person)
 
-        now_lidar_date = datetime.datetime.fromisoformat(loaded["latest_timestamp"])
+        now_lidar_date = datetime.datetime.fromisoformat(
+            loaded["latest_timestamp"])
         if now_lidar_date < lastest_lidar_date:
             touched_visitors_id = set()
         lastest_lidar_date = now_lidar_date
 
         lastest_received_visitors_id = {x["id"] for x in loaded["objects"]}
 
-        visitors = [
-            {
-                "id": x["id"],
-                "x": (x["position"]["lon"] - origin_lon) / meter_per_1lon,
-                "y": (x["position"]["lat"] - origin_lat) / meter_per_1lat,
-            }
-            for x in loaded["objects"]
-        ]
-        untouched_visitors = [x for x in visitors if x["id"] not in touched_visitors_id]
-        touched_visitors = [x for x in visitors if x["id"] in touched_visitors_id]
+        visitors = [Visitor(x["id"], x["position"]["lon"], x["position"]["lat"], x["position"]["alt"],
+                            x["heading"], x["vertical_velocity"], x["horizontal_speed"]) for x in loaded["objects"]]
+        untouched_visitors = [
+            x for x in visitors if x["id"] not in touched_visitors_id]
+        touched_visitors = [
+            x for x in visitors if x["id"] in touched_visitors_id]
         players = [
-            {"name": x.user_name, "x": x.user_x, "y": x.user_y, "score": x.user_score}
+            {"name": x.user_name, "x": x.user_x,
+                "y": x.user_y, "score": x.user_score}
             for x in server.connections
         ]
         sending_data = {
