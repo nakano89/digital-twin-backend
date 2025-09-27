@@ -1,4 +1,4 @@
-本リポジトリのnextブランチは、[mainブランチ](https://github.com/nakano89/digital-twin-backend)と以下の点で異なります。nextブランチの詳細を把握するにあたっては、これに対応するクライアント実装例として、[Pyxelクライアント（バックエンドサーバー検証用）のnextブランチ](https://github.com/nakano89/digital-twin-pyxel-client/tree/next)におけるソースコードも参照してください。
+本リポジトリの**nextブランチ**は、[mainブランチ](https://github.com/nakano89/digital-twin-backend)と以下の点で異なります。nextブランチの詳細を把握するにあたっては、これに対応するクライアント実装例として、[Pyxelクライアント（バックエンドサーバー検証用）のnextブランチ](https://github.com/nakano89/digital-twin-pyxel-client/tree/next)におけるソースコードも参照してください。
 
 * 各プレイヤーが、SFC内にいるか否かについても、扱います。
     * ①オープニング・ハンドシェイクにおいて、`digitaltwin-user-insfc`ヘッダの値（文字列）を、`true`または`false`としてください。
