@@ -27,7 +27,9 @@ class Visitors:
 
     @classmethod
     def update_existing_visitors(cls, visitors_id):
-        alive_visitors = [id_ for id_ in visitors_id if cls._visitors_hp[id_] > 0]
+        alive_visitors = [
+            id_ for id_ in visitors_id if cls._visitors_hp.get(id_, 100) > 0
+        ]
         cls._alive_visitors = alive_visitors
         cls._alive_visitors_history.update(set(alive_visitors))
 
@@ -58,7 +60,6 @@ class Visitors:
             decrease = cls._visitors_hp[id_]
             cls._visitors_hp[id_] = 0
             cls._dead_visitors_count += 1
-
             return decrease
         else:
             cls._visitors_hp[id_] -= try_decrease
