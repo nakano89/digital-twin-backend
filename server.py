@@ -1,4 +1,5 @@
 import json
+import time
 import datetime
 from zoneinfo import ZoneInfo
 import queue
@@ -14,14 +15,35 @@ origin_lon = 139.426989
 meter_per_1lat = 0.00000901325
 meter_per_1lon = 0.0000110065
 
+lastest_bonus_time = time.monotonic()
+lastest_lidar_date = datetime.datetime.now(ZoneInfo("Asia/Tokyo"))
+
 
 class Visitors:
-    _visitors_hp = {}
     _existing_visitors_id = []
+    _visitors_existing_count = {}
+    _visitors_hp = {}
+    _dead_visitors_count = 0
 
     @classmethod
-    def update_existing_visitors(cls, ids_):
-        cls._existing_visitors_id = ids_
+    def update_existing_visitors(cls, visitors_id):
+        cls._existing_visitors_id = visitors_id
+        for id_ in visitors_id:
+            if id_ in cls._visitors_existing_count:
+                cls._visitors_existing_count[id_] += 1
+            else:
+                cls._visitors_existing_count[id_] = 1
+
+    @classmethod
+    def get_bonus(cls):
+        bonus = int(
+            cls._dead_visitors_count
+            / len([x for x in cls._visitors_existing_count.values() if x >= 10])
+            * 100
+        )
+        cls._visitors_existing_count = {}
+        cls._dead_visitors_count = 0
+        return bonus
 
     @classmethod
     def get_hp(cls, id_):
@@ -41,6 +63,7 @@ class Visitors:
         if cls._visitors_hp[id_] <= try_decrease:
             decrease = cls._visitors_hp[id_]
             cls._visitors_hp[id_] = 0
+            cls._dead_visitors_count += 1
 
             return decrease
         else:
@@ -55,7 +78,7 @@ class Players:
     def get_all_players_data(cls):
         return [
             {
-                "type": c.user_type,
+                "insfc": c.user_insfc,
                 "name": c.user_name,
                 "score": c.user_score,
                 "hp": c.user_hp,
@@ -68,12 +91,19 @@ class Players:
         ]
 
     @classmethod
-    def init(cls, connection, name, type_):
+    def give_all_sfc_players_bonus(cls, bonus):
+        for c in cls.server.connections:
+            if not c.user_insfc:
+                continue
+            c.user_score += bonus
+
+    @classmethod
+    def init(cls, connection, name, insfc):
         assert name != ""
         for c in cls.server.connections:
             assert name != c.user_name
         connection.user_name = name
-        connection.user_type = type_
+        connection.user_insfc = insfc
         connection.user_score = 0
         connection.user_hp = 100
 
@@ -147,14 +177,26 @@ async def handler(connection):
 
 
 async def broadcast_json(lidar2person_queue):
+    global lastest_bonus_time
+    global lastest_lidar_date
     while True:
         try:
-            lidar2person = lidar2person_queue.get(False)
+            lidar2_person = lidar2person_queue.get(False)
         except queue.Empty:
             await asyncio.sleep(0.01)
             continue
 
-        loaded = json.loads(lidar2person)
+        now_time = time.monotonic()
+        if lastest_bonus_time <= now_time + 30:
+            Players.give_all_sfc_players_bonus(Visitors.get_bonus())
+        lastest_bonus_time = now_time
+
+        loaded = json.loads(lidar2_person)
+
+        now_lidar_date = datetime.datetime.fromisoformat(loaded["latest_timestamp"])
+        if now_lidar_date < lastest_lidar_date:
+            Visitors._visitors_hp = {}
+        lastest_lidar_date = now_lidar_date
 
         Visitors.update_existing_visitors([str(o["id"]) for o in loaded["objects"]])
 
@@ -188,7 +230,7 @@ def process_request(connection, request):
         Players.init(
             connection,
             request.headers["digitaltwin-user-name"],
-            request.headers["digitaltwin-user-type"],
+            request.headers["digitaltwin-user-insfc"] in ["True", "true"],
         )
         Players.set_property(
             connection,
