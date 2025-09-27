@@ -36,11 +36,10 @@ class Visitors:
 
     @classmethod
     def get_bonus(cls):
-        bonus = int(
-            cls._dead_visitors_count
-            / len([x for x in cls._visitors_existing_count.values() if x >= 10])
-            * 100
+        count_visitors = min(
+            1, len([x for x in cls._visitors_existing_count.values() if x >= 10])
         )
+        bonus = int(cls._dead_visitors_count / count_visitors * 100)
         cls._visitors_existing_count = {}
         cls._dead_visitors_count = 0
         return bonus
@@ -187,7 +186,7 @@ async def broadcast_json(lidar2person_queue):
             continue
 
         now_time = time.monotonic()
-        if lastest_bonus_time <= now_time + 30:
+        if lastest_bonus_time + 30 <= now_time:
             Players.give_all_sfc_players_bonus(Visitors.get_bonus())
         lastest_bonus_time = now_time
 
