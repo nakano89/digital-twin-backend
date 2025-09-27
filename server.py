@@ -119,7 +119,6 @@ class Players:
                 if c.user_hp <= try_decrease:
                     decrease = c.user_hp
                     c.user_hp = 0
-
                     return decrease
                 else:
                     c.user_hp -= try_decrease
