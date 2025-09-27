@@ -21,26 +21,20 @@ lastest_lidar_date = datetime.datetime.now(ZoneInfo("Asia/Tokyo"))
 
 class Visitors:
     _existing_visitors_id = []
-    _visitors_existing_count = {}
+    _existed_visitors = set()
     _visitors_hp = {}
     _dead_visitors_count = 0
 
     @classmethod
     def update_existing_visitors(cls, visitors_id):
         cls._existing_visitors_id = visitors_id
-        for id_ in visitors_id:
-            if id_ in cls._visitors_existing_count:
-                cls._visitors_existing_count[id_] += 1
-            else:
-                cls._visitors_existing_count[id_] = 1
+        cls._existed_visitors.update(set(visitors_id))
 
     @classmethod
     def get_bonus(cls):
-        count_visitors = max(
-            1, len([x for x in cls._visitors_existing_count.values() if x >= 10])
-        )
+        count_visitors = max(1, len(cls._existed_visitors))
         bonus = int(cls._dead_visitors_count / count_visitors * 100)
-        cls._visitors_existing_count = {}
+        cls._existed_visitors = set()
         cls._dead_visitors_count = 0
         return bonus
 
