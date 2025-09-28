@@ -44,6 +44,9 @@ class Entity:
         self.is_alive = True
         self.last_update_time = datetime.datetime.now()
         self.version = 0
+        # 陣営（faction）: 'Escort'（護衛）/ 'Attack'（攻撃）/ 追加も可
+        # 既定は None。サブクラスや生成時に設定する
+        self.faction = None
 
     def to_dict(self):
         """サブクラスでオーバーライドして、JSONシリアライゼーション用の辞書を返す"""
@@ -65,10 +68,13 @@ class Entity:
 
 
 class Player(Entity):
-    def __init__(self, name, x=0, y=0, score=0, hp=100):
+    def __init__(self, name, x=0, y=0, score=0, hp=100, faction='Attack'):
         super().__init__(entity_id=name, x=x, y=y, hp=hp)
         self.name = name
         self.score = score
+        # 暫定的な陣営設定 - 削除予定
+        # TODO: より高度な陣営システムに置き換える予定
+        self.faction = faction
 
     def update_position(self, x, y):
         self.x = round_digits(x)
@@ -106,6 +112,8 @@ class Visitor(Entity):
         self.vxy = round_digits(vxy)
         self.killed_by = None
         self.death_time = None
+        # 暫定: Visitor は Escort 陣営
+        self.faction = 'Escort'
 
     def to_dict(self):
         """JSONシリアライゼーション用の辞書形式変換"""
@@ -153,10 +161,13 @@ async def handler(connection):
 
     # プレイヤーオブジェクトを作成してグローバル辞書に追加
     if hasattr(connection, 'user_name'):
+        # 暫定的な陣営設定 - 削除予定
+        # TODO: より高度な陣営システムに置き換える予定
+        player_faction = 'Attack'  # デフォルトはAttack陣営
         player = Player(connection.user_name,
-                        connection.user_x, connection.user_y)
+                        connection.user_x, connection.user_y, faction=player_faction)
         players[connection.user_name] = player
-        print(f"Player {connection.user_name} joined the game")
+        print(f"Player {connection.user_name} joined the game with faction {player_faction}")
 
     try:
         while True:
@@ -212,47 +223,94 @@ async def handler(connection):
                     print(f"Invalid visitor ID format: {visitor}")
                     continue
 
-            # 新: damage_reports によるダメージ適用（冪等）
+            # 新: damage_reports によるダメージ適用（冪等 + 陣営チェック）
             if "damage_reports" in loaded and loaded["damage_reports"] is not None:
                 for rep in loaded["damage_reports"]:
                     try:
-                        target_id = int(rep.get("target_id"))
+                        target_id_str = rep.get("target_id")
+                        if not target_id_str:
+                            print(f"Invalid damage report: empty target_id")
+                            continue
+                            
                         shooter_id = rep.get("shooter_id")
                         damage = float(rep.get("damage", 0))
                         hit_id = rep.get("hit_id") or str(uuid.uuid4())
                         # target_version = rep.get("target_version")  # 今は参照のみ
 
-                        if target_id not in visitors:
+                        # ターゲットの種類を判定（Visitor または Player）
+                        target_entity = None
+                        target_faction = None
+                        
+                        # Visitor として処理を試行
+                        try:
+                            target_id = int(target_id_str)
+                            if target_id in visitors:
+                                target_entity = visitors[target_id]
+                                target_faction = getattr(target_entity, 'faction', None)
+                                print(f"Processing damage to Visitor {target_id} (faction: {target_faction})")
+                        except ValueError:
+                            # プレイヤーIDとして処理
+                            if target_id_str in players:
+                                target_entity = players[target_id_str]
+                                target_faction = getattr(target_entity, 'faction', None)
+                                print(f"Processing damage to Player {target_id_str} (faction: {target_faction})")
+                            else:
+                                print(f"Invalid damage report: target not found '{target_id_str}' (available players: {list(players.keys())})")
+                                continue
+                        
+                        if target_entity is None:
+                            print(f"Invalid damage report: target not found '{target_id_str}'")
                             continue
-                        v = visitors[target_id]
-                        # 冪等: 既処理hit_idは無視
-                        cache = visitor_hit_id_cache.setdefault(target_id, set())
-                        if hit_id in cache:
-                            continue
-                        cache.add(hit_id)
-                        if len(cache) > 512:
-                            # サイズ制限（古いものから削除）
+                        
+                        # 冪等: 既処理hit_idは無視（Visitor用キャッシュ）
+                        if isinstance(target_entity, Visitor):
+                            cache = visitor_hit_id_cache.setdefault(target_id, set())
+                            if hit_id in cache:
+                                continue
+                            cache.add(hit_id)
+                            if len(cache) > 512:
+                                # サイズ制限（古いものから削除）
+                                try:
+                                    cache.pop()
+                                except KeyError:
+                                    pass
+
+                        # 暫定的な陣営ダメージ判定（プレイヤー同士でも陣営が違えばダメージ有効）
+                        # TODO: より高度なダメージシステムに置き換える予定
+                        shooter_faction = None
+                        if shooter_id in players:
+                            shooter_faction = players[shooter_id].faction
+                        # ここで拡張: shooter が visitor の可能性があれば visitors も参照
+                        elif shooter_id is not None:
                             try:
-                                cache.pop()
-                            except KeyError:
-                                pass
+                                sid_int = int(shooter_id)
+                                if sid_int in visitors:
+                                    shooter_faction = visitors[sid_int].faction
+                            except Exception:
+                                shooter_faction = shooter_faction
+
+                        # 暫定的な処理: 同陣営同士のダメージは無効（プレイヤー同士でも陣営が違えばダメージ有効）
+                        if shooter_faction is not None and target_faction is not None and shooter_faction == target_faction:
+                            # 同士討ちは棄却
+                            print(f"Friendly fire rejected: shooter={shooter_id}({shooter_faction}) -> target={target_id_str}({target_faction}) dmg={damage}")
+                            continue
 
                         # 既に死亡していれば無視
-                        if not v.is_alive:
+                        if not target_entity.is_alive:
                             continue
 
                         # ダメージ適用
-                        before_alive = v.is_alive
-                        v.take_damage(damage)
-                        after_alive = v.is_alive
+                        before_alive = target_entity.is_alive
+                        target_entity.take_damage(damage)
+                        after_alive = target_entity.is_alive
                         if (not after_alive) and before_alive:
                             # 初めてのキル
-                            v.killed_by = shooter_id
-                            v.death_time = datetime.datetime.now()
+                            target_entity.killed_by = shooter_id
+                            target_entity.death_time = datetime.datetime.now()
                             # スコア加算
                             if shooter_id in players:
                                 players[shooter_id].increment_score()
-                        print(f"Damage applied: target={target_id}, dmg={damage}, hp={v.hp}, alive={v.is_alive}, by={shooter_id}")
+                        print(f"Damage applied: target={target_id_str}, dmg={damage}, hp={target_entity.hp}, alive={target_entity.is_alive}, by={shooter_id}")
                     except Exception as e:
                         print(f"Invalid damage report: {e}")
 
