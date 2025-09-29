@@ -554,6 +554,9 @@ def process_request(connection, request):
         client_faction = request.headers.get("digitaltwin-user-faction", "").strip()
         if client_faction in ("Escort", "Attack"):
             connection.user_faction = client_faction
+        
+        # user_insfc属性をデフォルト値で初期化（エラー回避のため）
+        connection.user_insfc = False
     except ValueError as e:
         print(f"Invalid coordinate values: {e}")
         return connection.respond(http.HTTPStatus.BAD_REQUEST, "Invalid coordinate values\n")
