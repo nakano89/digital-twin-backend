@@ -91,10 +91,11 @@ class Entity:
 
 
 class Player(Entity):
-    def __init__(self, uid, name, x=0, y=0, score=0, hp=100, faction='Attack'):
+    def __init__(self, uid, name, x=0, y=0, h=0.0, score=0, hp=100, faction='Attack'):
         super().__init__(entity_id=name, x=x, y=y, hp=hp)
         self.uid = uid
         self.name = name
+        self.h = h
         self.score = score
         self.player_kills = 0    # 新規: プレイヤーキル数
         self.visitor_kills = 0   # 新規: ビジターキル数
@@ -115,6 +116,7 @@ class Player(Entity):
             "name": self.name,
             "x": self.x,
             "y": self.y,
+            "h": getattr(self, 'h', 0.0),
             "score": self.score,
             "player_kills": self.player_kills,
             "visitor_kills": self.visitor_kills,
@@ -246,7 +248,13 @@ async def handler(connection):
                 player = players[connection.user_uid]
                 old_x, old_y = player.x, player.y
                 player.update_position(loaded["x"], loaded["y"])
-                print(f"Player {player.name} position updated: ({old_x}, {old_y}) -> ({player.x}, {player.y})")
+                # 高さhが送られてきた場合は更新
+                try:
+                    if "h" in loaded:
+                        player.h = round_digits(float(loaded["h"]))
+                except Exception:
+                    pass
+                print(f"Player {player.name} position updated: ({old_x}, {old_y}) -> ({player.x}, {player.y}), h={getattr(player, 'h', 0.0)}")
 
             # connectionの属性も更新（後方互換性のため）
             connection.user_x = loaded["x"]
