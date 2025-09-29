@@ -532,16 +532,13 @@ def process_request(connection, request):
         if "digitaltwin-user-name" not in request.headers or request.headers["digitaltwin-user-name"] == "":
             return connection.respond(http.HTTPStatus.BAD_REQUEST, "Missing user name\n")
 
-        # 既存のユーザー名重複チェック
-        for c in server.connections:
-            if hasattr(c, 'user_name') and c.user_name == request.headers["digitaltwin-user-name"]:
-                return connection.respond(http.HTTPStatus.CONFLICT, "User name already exists\n")
-
         connection.user_name = request.headers["digitaltwin-user-name"]
         connection.user_x = float(
             request.headers.get("digitaltwin-user-x", "0"))
         connection.user_y = float(
             request.headers.get("digitaltwin-user-y", "0"))
+        # サーバ発行の一意UIDを割当
+        connection.user_uid = str(uuid.uuid4())
         # クライアントからの陣営指定（任意）
         client_faction = request.headers.get(
             "digitaltwin-user-faction", "").strip()
