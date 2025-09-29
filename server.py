@@ -117,7 +117,8 @@ class Player(Entity):
             "visitor_kills": self.visitor_kills,
             "hp": self.hp,
             "max_hp": self.max_hp,
-            "is_alive": self.is_alive
+            "is_alive": self.is_alive,
+            "faction": self.faction
         }
 
     def increment_score(self):
