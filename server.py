@@ -244,7 +244,9 @@ async def handler(connection):
             # プレイヤーオブジェクトの位置を更新
             if hasattr(connection, 'user_uid') and connection.user_uid in players:
                 player = players[connection.user_uid]
+                old_x, old_y = player.x, player.y
                 player.update_position(loaded["x"], loaded["y"])
+                print(f"Player {player.name} position updated: ({old_x}, {old_y}) -> ({player.x}, {player.y})")
 
             # connectionの属性も更新（後方互換性のため）
             connection.user_x = loaded["x"]
@@ -508,7 +510,9 @@ async def broadcast_json(lidar2person_queue):
         # プレイヤー情報をオブジェクトから取得
         players_list = []
         for player in players.values():
-            players_list.append(player.to_dict())
+            player_dict = player.to_dict()
+            print(f"Broadcasting player {player.name}: pos=({player_dict['x']}, {player_dict['y']})")
+            players_list.append(player_dict)
 
         sending_data = {
             "lidar_time": loaded["latest_timestamp"],
