@@ -315,7 +315,7 @@ async def handler(connection):
                                 target_id, set())
                             if hit_id in cache:
                                 continue
-                            cache.add(hit_id)＠
+                            cache.add(hit_id)
                             if len(cache) > 512:
                                 # サイズ制限（古いものから削除）
                                 try:
