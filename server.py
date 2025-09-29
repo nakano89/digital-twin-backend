@@ -19,8 +19,7 @@ meter_per_1lon = 0.0000110065
 
 lastest_bonus_time = time.monotonic()
 lastest_lidar_date = datetime.datetime.now(ZoneInfo("Asia/Tokyo"))
-<<<<<<< HEAD
-
+lastest_received_visitors_id = set()
 
 class Visitors:
     _alive_visitors = []
@@ -130,9 +129,6 @@ class Players:
     @classmethod
     def increase_score(cls, connection, increase):
         connection.user_score += increase
-=======
-lastest_received_visitors_id = set()
->>>>>>> main
 
 # エンティティ管理用辞書
 players = {}  # player_name -> Player object
@@ -273,37 +269,6 @@ async def handler(connection):
     player_name = getattr(connection, 'user_name', 'Unknown')
     print(f"New connection established from {player_name}")
 
-<<<<<<< HEAD
-        try:
-            loaded = json.loads(received)
-            assert type(loaded["x"]) in (int, float)
-            assert type(loaded["y"]) in (int, float)
-            assert type(loaded["angle"]) in (int, float)
-            assert type(loaded["speed"]) in (int, float)
-            for visitor_id, try_hp_decrease in loaded["decreased_visitors_hp"].items():
-                assert type(visitor_id) is str
-                assert type(try_hp_decrease) is int
-            for player_name, try_hp_decrease in loaded["decreased_players_hp"].items():
-                assert type(player_name) is str
-                assert type(try_hp_decrease) is int
-        except:
-            await connection.close(code=1008, reason="Invalid Message")
-            return
-
-        Players.set_property(
-            connection, loaded["x"], loaded["y"], loaded["angle"], loaded["speed"]
-        )
-
-        if Players.get_hp(connection) == 0:
-            return
-
-        for visitor_id, try_hp_decrease in loaded["decreased_visitors_hp"].items():
-            hp_decrease = Visitors.try_decrease_hp(visitor_id, try_hp_decrease)
-            Players.increase_score(connection, hp_decrease)
-        for player_name, try_hp_decrease in loaded["decreased_players_hp"].items():
-            hp_decrease = Players.try_decrease_hp(player_name, try_hp_decrease)
-            Players.increase_score(connection, hp_decrease)
-=======
     # プレイヤーオブジェクトを作成してグローバル辞書に追加
     if hasattr(connection, 'user_name'):
         # クライアント指定があればそれを優先、無ければデフォルトAttack
@@ -380,7 +345,6 @@ async def handler(connection):
                         damage = float(rep.get("damage", 0))
                         hit_id = rep.get("hit_id") or str(uuid.uuid4())
                         # target_version = rep.get("target_version")  # 今は参照のみ
->>>>>>> main
 
                         # ターゲットの種類を判定（Visitor または Player）
                         target_entity = None
@@ -475,10 +439,7 @@ async def handler(connection):
 async def broadcast_json(lidar2person_queue):
     global lastest_bonus_time
     global lastest_lidar_date
-<<<<<<< HEAD
-=======
     global lastest_received_visitors_id
->>>>>>> main
     while True:
         try:
             lidar2_person = lidar2person_queue.get(False)
@@ -496,36 +457,14 @@ async def broadcast_json(lidar2person_queue):
         now_lidar_date = datetime.datetime.fromisoformat(
             loaded["latest_timestamp"])
         if now_lidar_date < lastest_lidar_date:
-<<<<<<< HEAD
-            Visitors._visitors_hp = {}
-=======
             # ダミーデータがリセットされた場合、すべてのvisitorを復活
             for visitor in visitors.values():
                 visitor.revive()
                 visitor.killed_by = None
->>>>>>> main
         lastest_lidar_date = now_lidar_date
 
         Visitors.update_existing_visitors([str(o["id"]) for o in loaded["objects"]])
 
-<<<<<<< HEAD
-        visitors = [
-            {
-                "id": str(o["id"]),
-                "hp": Visitors.get_hp(str(o["id"])),
-                "x": (o["position"]["lon"] - origin_lon) / meter_per_1lon,
-                "y": (o["position"]["lat"] - origin_lat) / meter_per_1lat,
-                "angle": o["heading"],
-                "speed": o["horizontal_speed"],
-            }
-            for o in loaded["objects"]
-        ]
-        players = Players.get_all_players_data()
-        sending_data = {
-            "lidar_time": loaded["latest_timestamp"],
-            "visitors": visitors,
-            "players": players,
-=======
         # Visitorオブジェクトをグローバル辞書に保存し、to_dict()で変換
         current_visitors = {}
         for visitor_data in loaded["objects"]:
@@ -586,7 +525,6 @@ async def broadcast_json(lidar2person_queue):
             "untouched_visitors": alive_visitors,  # Unityクライアント互換性のため
             "visitors": visitors_full,  # 新: version/HP/生死
             "players": players_list,
->>>>>>> main
         }
         broadcast(Players.server.connections, json.dumps(sending_data))
 
@@ -598,27 +536,12 @@ def process_request(connection, request):
         return connection.respond(http.HTTPStatus.OK, "OK\n")
 
     try:
-<<<<<<< HEAD
-        Players.init(
-            connection,
-            request.headers["digitaltwin-user-name"],
-            request.headers["digitaltwin-user-insfc"] in ["True", "true"],
-        )
-        Players.set_property(
-            connection,
-            float(request.headers["digitaltwin-user-x"]),
-            float(request.headers["digitaltwin-user-y"]),
-            float(request.headers["digitaltwin-user-angle"]),
-            float(request.headers["digitaltwin-user-speed"]),
-        )
-    except:
-=======
         # Unityクライアントからのヘッダーチェック
         if "digitaltwin-user-name" not in request.headers or request.headers["digitaltwin-user-name"] == "":
             return connection.respond(http.HTTPStatus.BAD_REQUEST, "Missing user name\n")
 
         # 既存のユーザー名重複チェック
-        for c in server.connections:
+        for c in Players.server.connections:
             if hasattr(c, 'user_name') and c.user_name == request.headers["digitaltwin-user-name"]:
                 return connection.respond(http.HTTPStatus.CONFLICT, "User name already exists\n")
 
@@ -636,7 +559,6 @@ def process_request(connection, request):
         return connection.respond(http.HTTPStatus.BAD_REQUEST, "Invalid coordinate values\n")
     except Exception as e:
         print(f"Request processing error: {e}")
->>>>>>> main
         return connection.respond(http.HTTPStatus.BAD_REQUEST, "Invalid Request\n")
 
 
