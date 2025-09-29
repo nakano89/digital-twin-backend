@@ -58,7 +58,7 @@ def add_game_event(event_type, shooter, target, damage=0, extra_info=None):
 class Entity:
     """エンティティの基底クラス - 共通プロパティとメソッドを提供"""
 
-    def __init__(self, entity_id, x=0, y=0, hp=100):
+    def __init__(self, entity_id, x, y, hp=100):
         self.id = entity_id
         self.x = x
         self.y = y
@@ -91,7 +91,7 @@ class Entity:
 
 
 class Player(Entity):
-    def __init__(self, uid, name, x=0, y=0, h=0.0, score=0, hp=100, faction='Attack'):
+    def __init__(self, uid, name, x, y, h, score=0, hp=100, faction='Attack'):
         super().__init__(entity_id=name, x=x, y=y, hp=hp)
         self.uid = uid
         self.name = name
@@ -247,14 +247,23 @@ async def handler(connection):
             if hasattr(connection, 'user_uid') and connection.user_uid in players:
                 player = players[connection.user_uid]
                 old_x, old_y = player.x, player.y
-                player.update_position(loaded["x"], loaded["y"])
+                new_x, new_y = loaded["x"], loaded["y"]
+
+                # 座標更新の有効性チェック
+                if abs(new_x) < 0.1 and abs(new_y) < 0.1:
+                    print(
+                        f"WARNING: Player {player.name} sent invalid position ({new_x}, {new_y}), keeping old position ({old_x}, {old_y})")
+                else:
+                    player.update_position(new_x, new_y)
+                    print(
+                        f"Player {player.name} position updated: ({old_x}, {old_y}) -> ({player.x}, {player.y})")
+
                 # 高さhが送られてきた場合は更新
                 try:
                     if "h" in loaded:
                         player.h = round_digits(float(loaded["h"]))
                 except Exception:
                     pass
-                print(f"Player {player.name} position updated: ({old_x}, {old_y}) -> ({player.x}, {player.y}), h={getattr(player, 'h', 0.0)}")
 
             # connectionの属性も更新（後方互換性のため）
             connection.user_x = loaded["x"]
@@ -439,7 +448,8 @@ async def handler(connection):
         # プレイヤーが切断したときの清理処理
         if hasattr(connection, 'user_uid') and connection.user_uid in players:
             left = players.pop(connection.user_uid)
-            print(f"Player {left.name} left the game (uid={connection.user_uid})")
+            print(
+                f"Player {left.name} left the game (uid={connection.user_uid})")
 
 
 async def broadcast_json(lidar2person_queue):
@@ -515,11 +525,17 @@ async def broadcast_json(lidar2person_queue):
                 "version": visitor.version,
             })
 
-        # プレイヤー情報をオブジェクトから取得
+        # プレイヤー情報をオブジェクトから取得（有効座標のみ）
         players_list = []
         for player in players.values():
             player_dict = player.to_dict()
-            print(f"Broadcasting player {player.name}: pos=({player_dict['x']}, {player_dict['y']})")
+            # 無効座標（0,0,0付近）のプレイヤーはブロードキャストしない
+            if abs(player_dict['x']) < 0.1 and abs(player_dict['y']) < 0.1:
+                print(
+                    f"Skipping player {player.name}: invalid position ({player_dict['x']}, {player_dict['y']})")
+                continue
+            print(
+                f"Broadcasting player {player.name}: pos=({player_dict['x']}, {player_dict['y']})")
             players_list.append(player_dict)
 
         sending_data = {
@@ -545,10 +561,16 @@ def process_request(connection, request):
             return connection.respond(http.HTTPStatus.BAD_REQUEST, "Missing user name\n")
 
         connection.user_name = request.headers["digitaltwin-user-name"]
-        connection.user_x = float(
-            request.headers.get("digitaltwin-user-x", "0"))
-        connection.user_y = float(
-            request.headers.get("digitaltwin-user-y", "0"))
+        # 初期座標を取得（有効性チェック付き）
+        user_x_str = request.headers.get("digitaltwin-user-x", "0")
+        user_y_str = request.headers.get("digitaltwin-user-y", "0")
+        connection.user_x = float(user_x_str)
+        connection.user_y = float(user_y_str)
+
+        # 初期座標が無効（0,0付近）の場合は警告
+        if abs(connection.user_x) < 0.1 and abs(connection.user_y) < 0.1:
+            print(
+                f"WARNING: Player {connection.user_name} connecting with invalid initial position ({connection.user_x}, {connection.user_y})")
         # サーバ発行の一意UIDを割当
         connection.user_uid = str(uuid.uuid4())
         # クライアントからの陣営指定（任意）
