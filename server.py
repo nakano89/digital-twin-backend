@@ -1,5 +1,4 @@
 import json
-import time
 import datetime
 from zoneinfo import ZoneInfo
 import queue
@@ -17,118 +16,9 @@ alt_offset = 33.0921
 meter_per_1lat = 0.00000901325
 meter_per_1lon = 0.0000110065
 
-lastest_bonus_time = time.monotonic()
+server = None
 lastest_lidar_date = datetime.datetime.now(ZoneInfo("Asia/Tokyo"))
 lastest_received_visitors_id = set()
-
-class Visitors:
-    _alive_visitors = []
-    _alive_visitors_history = set()
-    _visitors_hp = {}
-    _dead_visitors_count = 0
-
-    @classmethod
-    def update_existing_visitors(cls, visitors_id):
-        alive_visitors = [
-            id_ for id_ in visitors_id if cls._visitors_hp.get(id_, 100) > 0
-        ]
-        cls._alive_visitors = alive_visitors
-        cls._alive_visitors_history.update(set(alive_visitors))
-
-    @classmethod
-    def get_bonus(cls):
-        count_visitors = max(1, len(cls._alive_visitors_history))
-        bonus = int(cls._dead_visitors_count / count_visitors * 100)
-        cls._alive_visitors_history = set()
-        cls._dead_visitors_count = 0
-        return bonus
-
-    @classmethod
-    def get_hp(cls, id_):
-        if id_ not in cls._visitors_hp:
-            cls._visitors_hp[id_] = 100
-
-        return cls._visitors_hp[id_]
-
-    @classmethod
-    def try_decrease_hp(cls, id_, try_decrease):
-        if id_ not in cls._visitors_hp:
-            cls._visitors_hp[id_] = 100
-
-        if id_ not in cls._alive_visitors:
-            return 0
-
-        if cls._visitors_hp[id_] <= try_decrease:
-            decrease = cls._visitors_hp[id_]
-            cls._visitors_hp[id_] = 0
-            cls._dead_visitors_count += 1
-            return decrease
-        else:
-            cls._visitors_hp[id_] -= try_decrease
-            return try_decrease
-
-
-class Players:
-    server = None
-
-    @classmethod
-    def get_all_players_data(cls):
-        return [
-            {
-                "insfc": c.user_insfc,
-                "name": c.user_name,
-                "score": c.user_score,
-                "hp": c.user_hp,
-                "x": c.user_x,
-                "y": c.user_y,
-                "angle": c.user_angle,
-                "speed": c.user_speed,
-            }
-            for c in cls.server.connections
-        ]
-
-    @classmethod
-    def give_all_sfc_players_bonus(cls, bonus):
-        for c in cls.server.connections:
-            if c.user_insfc:
-                c.user_score += bonus
-
-    @classmethod
-    def init(cls, connection, name, insfc):
-        assert name != ""
-        for c in cls.server.connections:
-            assert name != c.user_name
-        connection.user_name = name
-        connection.user_insfc = insfc
-        connection.user_score = 0
-        connection.user_hp = 100
-
-    @classmethod
-    def get_hp(cls, connection):
-        return connection.user_hp
-
-    @classmethod
-    def set_property(cls, connection, x, y, angle, speed):
-        connection.user_x = x
-        connection.user_y = y
-        connection.user_angle = angle
-        connection.user_speed = speed
-
-    @classmethod
-    def try_decrease_hp(cls, name, try_decrease):
-        for c in cls.server.connections:
-            if c.user_name == name:
-                if c.user_hp <= try_decrease:
-                    decrease = c.user_hp
-                    c.user_hp = 0
-                    return decrease
-                else:
-                    c.user_hp -= try_decrease
-                    return try_decrease
-
-    @classmethod
-    def increase_score(cls, connection, increase):
-        connection.user_score += increase
 
 # エンティティ管理用辞書
 players = {}  # player_name -> Player object
@@ -265,6 +155,7 @@ class Visitor(Entity):
         self.version += 1
         return True
 
+
 async def handler(connection):
     player_name = getattr(connection, 'user_name', 'Unknown')
     print(f"New connection established from {player_name}")
@@ -276,7 +167,8 @@ async def handler(connection):
         player = Player(connection.user_name,
                         connection.user_x, connection.user_y, faction=player_faction)
         players[connection.user_name] = player
-        print(f"Player {connection.user_name} joined the game with faction {player_faction}")
+        print(
+            f"Player {connection.user_name} joined the game with faction {player_faction}")
 
     try:
         while True:
@@ -340,7 +232,7 @@ async def handler(connection):
                         if not target_id_str:
                             print(f"Invalid damage report: empty target_id")
                             continue
-                            
+
                         shooter_id = rep.get("shooter_id")
                         damage = float(rep.get("damage", 0))
                         hit_id = rep.get("hit_id") or str(uuid.uuid4())
@@ -349,31 +241,38 @@ async def handler(connection):
                         # ターゲットの種類を判定（Visitor または Player）
                         target_entity = None
                         target_faction = None
-                        
+
                         # Visitor として処理を試行
                         try:
                             target_id = int(target_id_str)
                             if target_id in visitors:
                                 target_entity = visitors[target_id]
-                                target_faction = getattr(target_entity, 'faction', None)
-                                print(f"Processing damage to Visitor {target_id} (faction: {target_faction})")
+                                target_faction = getattr(
+                                    target_entity, 'faction', None)
+                                print(
+                                    f"Processing damage to Visitor {target_id} (faction: {target_faction})")
                         except ValueError:
                             # プレイヤーIDとして処理
                             if target_id_str in players:
                                 target_entity = players[target_id_str]
-                                target_faction = getattr(target_entity, 'faction', None)
-                                print(f"Processing damage to Player {target_id_str} (faction: {target_faction})")
+                                target_faction = getattr(
+                                    target_entity, 'faction', None)
+                                print(
+                                    f"Processing damage to Player {target_id_str} (faction: {target_faction})")
                             else:
-                                print(f"Invalid damage report: target not found '{target_id_str}' (available players: {list(players.keys())})")
+                                print(
+                                    f"Invalid damage report: target not found '{target_id_str}' (available players: {list(players.keys())})")
                                 continue
-                        
+
                         if target_entity is None:
-                            print(f"Invalid damage report: target not found '{target_id_str}'")
+                            print(
+                                f"Invalid damage report: target not found '{target_id_str}'")
                             continue
-                        
+
                         # 冪等: 既処理hit_idは無視（Visitor用キャッシュ）
                         if isinstance(target_entity, Visitor):
-                            cache = visitor_hit_id_cache.setdefault(target_id, set())
+                            cache = visitor_hit_id_cache.setdefault(
+                                target_id, set())
                             if hit_id in cache:
                                 continue
                             cache.add(hit_id)
@@ -401,7 +300,8 @@ async def handler(connection):
                         # 暫定的な処理: 同陣営同士のダメージは無効（プレイヤー同士でも陣営が違えばダメージ有効）
                         if shooter_faction is not None and target_faction is not None and shooter_faction == target_faction:
                             # 同士討ちは棄却
-                            print(f"Friendly fire rejected: shooter={shooter_id}({shooter_faction}) -> target={target_id_str}({target_faction}) dmg={damage}")
+                            print(
+                                f"Friendly fire rejected: shooter={shooter_id}({shooter_faction}) -> target={target_id_str}({target_faction}) dmg={damage}")
                             continue
 
                         # 既に死亡していれば無視
@@ -419,7 +319,8 @@ async def handler(connection):
                             # スコア加算
                             if shooter_id in players:
                                 players[shooter_id].increment_score()
-                        print(f"Damage applied: target={target_id_str}, dmg={damage}, hp={target_entity.hp}, alive={target_entity.is_alive}, by={shooter_id}")
+                        print(
+                            f"Damage applied: target={target_id_str}, dmg={damage}, hp={target_entity.hp}, alive={target_entity.is_alive}, by={shooter_id}")
                     except Exception as e:
                         print(f"Invalid damage report: {e}")
 
@@ -437,22 +338,16 @@ async def handler(connection):
 
 
 async def broadcast_json(lidar2person_queue):
-    global lastest_bonus_time
     global lastest_lidar_date
     global lastest_received_visitors_id
     while True:
         try:
-            lidar2_person = lidar2person_queue.get(False)
+            lidar2person = lidar2person_queue.get(False)
         except queue.Empty:
             await asyncio.sleep(0.01)
             continue
 
-        now_time = time.monotonic()
-        if lastest_bonus_time + 30 <= now_time:
-            Players.give_all_sfc_players_bonus(Visitors.get_bonus())
-            lastest_bonus_time = now_time
-
-        loaded = json.loads(lidar2_person)
+        loaded = json.loads(lidar2person)
 
         now_lidar_date = datetime.datetime.fromisoformat(
             loaded["latest_timestamp"])
@@ -463,7 +358,7 @@ async def broadcast_json(lidar2person_queue):
                 visitor.killed_by = None
         lastest_lidar_date = now_lidar_date
 
-        Visitors.update_existing_visitors([str(o["id"]) for o in loaded["objects"]])
+        lastest_received_visitors_id = {x["id"] for x in loaded["objects"]}
 
         # Visitorオブジェクトをグローバル辞書に保存し、to_dict()で変換
         current_visitors = {}
@@ -526,7 +421,7 @@ async def broadcast_json(lidar2person_queue):
             "visitors": visitors_full,  # 新: version/HP/生死
             "players": players_list,
         }
-        broadcast(Players.server.connections, json.dumps(sending_data))
+        broadcast(server.connections, json.dumps(sending_data))
 
         await asyncio.sleep(0.001)
 
@@ -541,7 +436,7 @@ def process_request(connection, request):
             return connection.respond(http.HTTPStatus.BAD_REQUEST, "Missing user name\n")
 
         # 既存のユーザー名重複チェック
-        for c in Players.server.connections:
+        for c in server.connections:
             if hasattr(c, 'user_name') and c.user_name == request.headers["digitaltwin-user-name"]:
                 return connection.respond(http.HTTPStatus.CONFLICT, "User name already exists\n")
 
@@ -551,12 +446,10 @@ def process_request(connection, request):
         connection.user_y = float(
             request.headers.get("digitaltwin-user-y", "0"))
         # クライアントからの陣営指定（任意）
-        client_faction = request.headers.get("digitaltwin-user-faction", "").strip()
+        client_faction = request.headers.get(
+            "digitaltwin-user-faction", "").strip()
         if client_faction in ("Escort", "Attack"):
             connection.user_faction = client_faction
-        
-        # user_insfc属性をデフォルト値で初期化（エラー回避のため）
-        connection.user_insfc = False
     except ValueError as e:
         print(f"Invalid coordinate values: {e}")
         return connection.respond(http.HTTPStatus.BAD_REQUEST, "Invalid coordinate values\n")
@@ -564,10 +457,13 @@ def process_request(connection, request):
         print(f"Request processing error: {e}")
         return connection.respond(http.HTTPStatus.BAD_REQUEST, "Invalid Request\n")
 
+    connection.user_score = 0
+
 
 async def websocket_async(lidar2person_queue):
-    async with serve(handler, port=8000, process_request=process_request) as server:
-        Players.server = server
+    global server
+    async with serve(handler, port=8000, process_request=process_request) as s:
+        server = s
         await broadcast_json(lidar2person_queue)
 
 
