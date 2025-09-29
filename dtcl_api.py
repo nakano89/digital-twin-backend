@@ -16,10 +16,6 @@ import boto3
 from awscrt import auth, io, mqtt
 from awscrt.exceptions import AwsCrtError
 from awsiot import mqtt_connection_builder
-from dotenv import load_dotenv
-
-load_dotenv()
-
 
 # Refresh Token
 refresh_token = os.environ["DTCL_REFRESH_TOKEN"]  ########## 変更 ##########
