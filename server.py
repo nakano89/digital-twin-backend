@@ -20,11 +20,17 @@ server = None
 lastest_lidar_date = datetime.datetime.now(ZoneInfo("Asia/Tokyo"))
 lastest_received_visitors_id = set()
 
+# 陣営スコア管理
+faction_scores = {"Attacker": 0, "Escort": 0}
+
 # エンティティ管理用辞書
 # プレイヤーは一意UIDで管理し、表示名（重複可）は属性として保持
 players = {}  # player_uid -> Player object
 visitors = {}  # visitor_id -> Visitor object
 visitor_hit_id_cache = {}  # visitor_id -> set of processed hit ids (bounded)
+
+# Visitor状態管理（ダブルカウント防止用）
+visitor_score_processed = set()  # 既にスコア処理済みのvisitor_idを記録
 
 # ゲームイベント管理
 recent_events = []  # 最近のキル・ダメージイベントのリスト（クライアント配信用）
@@ -53,6 +59,21 @@ def add_game_event(event_type, shooter, target, damage=0, extra_info=None):
     # 最大数を超えたら古いものを削除
     if len(recent_events) > MAX_EVENTS:
         recent_events = recent_events[-MAX_EVENTS:]
+
+
+def update_faction_score(faction, points=1):
+    """陣営スコアを更新する"""
+    global faction_scores
+    if faction in faction_scores:
+        faction_scores[faction] += points
+        print(f"[FACTION SCORE] {faction} += {points} (Total: {faction_scores[faction]})")
+    else:
+        print(f"[WARNING] Unknown faction: {faction}")
+
+
+def get_faction_scores():
+    """現在の陣営スコアを取得する"""
+    return faction_scores.copy()
 
 
 class Entity:
@@ -154,6 +175,8 @@ class Visitor(Entity):
         self.death_time = None
         # 暫定: Visitor は Escort 陣営
         self.faction = 'Escort'
+        # スコア処理済みフラグ（ダブルカウント防止）
+        self.score_processed = False
 
     def to_dict(self):
         """JSONシリアライゼーション用の辞書形式変換"""
@@ -289,7 +312,13 @@ async def handler(connection):
                             players[killer_name].increment_visitor_kills()
                             connection.user_score = players[killer_name].score
 
-                            print(f"🔥 VISITOR KILL: {killer_name} killed Visitor {visitor_id} "
+                            # 旧式キル処理でも陣営スコア更新（後方互換性）
+                            killer_faction = players[killer_name].faction
+                            if killer_faction == 'Attacker' or killer_faction == 'Attack':
+                                update_faction_score('Attacker', 1)
+                                visitors[visitor_id].score_processed = True
+
+                            print(f"[VISITOR KILL] {killer_name} killed Visitor {visitor_id} "
                                   f"(Visitor kills: {players[killer_name].visitor_kills})")
 
                             # イベント記録
@@ -400,6 +429,11 @@ async def handler(connection):
                             if isinstance(target_entity, Visitor):
                                 # ビジターキル
                                 players[shooter_id].increment_visitor_kills()
+                                # Attackerによるビジターキル → Attacker陣営スコア加算
+                                shooter_faction = players[shooter_id].faction
+                                if shooter_faction == 'Attacker' or shooter_faction == 'Attack':
+                                    update_faction_score('Attacker', 1)
+                                    target_entity.score_processed = True
                             elif isinstance(target_entity, Player):
                                 # プレイヤーキル
                                 players[shooter_id].increment_player_kills()
@@ -409,7 +443,7 @@ async def handler(connection):
                             if isinstance(target_entity, Visitor):
                                 killer_player = players.get(shooter_id)
                                 visitor_kills = killer_player.visitor_kills if killer_player else "?"
-                                print(f"💀 VISITOR KILL: uid={shooter_id} killed Visitor {target_id_str} "
+                                print(f"[VISITOR KILL] uid={shooter_id} killed Visitor {target_id_str} "
                                       f"(dmg={damage}) [Visitor kills: {visitor_kills}]")
 
                                 # イベント記録
@@ -419,7 +453,7 @@ async def handler(connection):
                             elif isinstance(target_entity, Player):
                                 killer_player = players.get(shooter_id)
                                 player_kills = killer_player.player_kills if killer_player else "?"
-                                print(f"💀 PLAYER KILL: uid={shooter_id} killed Player uid={target_id_str} "
+                                print(f"[PLAYER KILL] uid={shooter_id} killed Player uid={target_id_str} "
                                       f"(dmg={damage}) [Player kills: {player_kills}]")
 
                                 # イベント記録
@@ -427,7 +461,7 @@ async def handler(connection):
                                                {"target_type": "player", "killer_player_kills": player_kills})
                         else:
                             # 通常のダメージログ
-                            print(f"⚔️ DAMAGE: {shooter_id} → {target_id_str} "
+                            print(f"[DAMAGE] {shooter_id} -> {target_id_str} "
                                   f"(dmg={damage}, hp={target_entity.hp}/{target_entity.max_hp})")
 
                             # ダメージイベント記録
@@ -498,6 +532,21 @@ async def broadcast_json(lidar2person_queue):
 
             current_visitors[visitor.id] = visitor
 
+        # Visitor自然消滅検知（Escort陣営スコア加算）
+        # 前回存在したが今回のLidarデータにないVisitorを検出
+        previous_visitor_ids = set(visitors.keys())
+        current_visitor_ids = set(current_visitors.keys())
+        disappeared_visitor_ids = previous_visitor_ids - current_visitor_ids
+        
+        for disappeared_id in disappeared_visitor_ids:
+            disappeared_visitor = visitors[disappeared_id]
+            # killed_byがNone（Attackerに殺されていない）かつスコア未処理の場合
+            if disappeared_visitor.killed_by is None and not disappeared_visitor.score_processed:
+                # Escort陣営にスコア加算（自然消滅）
+                update_faction_score('Escort', 1)
+                disappeared_visitor.score_processed = True
+                print(f"[NATURAL DISAPPEARANCE] Visitor {disappeared_id} naturally disappeared -> Escort +1")
+
         # グローバルvisitors辞書を更新
         visitors.clear()
         visitors.update(current_visitors)
@@ -540,8 +589,10 @@ async def broadcast_json(lidar2person_queue):
 
         sending_data = {
             "lidar_time": loaded["latest_timestamp"],
-            "untouched_visitors": alive_visitors,  # Unityクライアント互換性のため
-            "visitors": visitors_full,  # 新: version/HP/生死
+            "Attacker": faction_scores["Attacker"],  # 陣営スコア: Attacker
+            "Escort": faction_scores["Escort"],      # 陣営スコア: Escort
+            "untouched_visitors": alive_visitors,    # Unityクライアント互換性のため
+            "visitors": visitors_full,               # 新: version/HP/生死
             "players": players_list,
             # 最新10件のイベント
             "recent_events": recent_events[-10:] if recent_events else [],
