@@ -76,13 +76,12 @@ def get_faction_scores():
     return faction_scores.copy()
 
 
-def determine_player_faction(client_ip, preferred_faction=None):
+def determine_player_faction(client_ip):
     """
-    プレイヤーの陣営をサーバー側で決定する
+    プレイヤーの陣営をサーバー側で決定する（完全サーバー主導）
     
     Args:
         client_ip (str): クライアントのIPアドレス
-        preferred_faction (str): クライアントが希望する陣営（参考程度、現在は無視）
     
     Returns:
         str: 決定された陣営 ('Attacker' または 'Escort')
@@ -94,11 +93,11 @@ def determine_player_faction(client_ip, preferred_faction=None):
     # else:
     #     return 'Attacker'  # 大学外はAttacker
     
-    # デバッグ: 完全にランダムで陣営決定（クライアント申告無視）
+    # デバッグ: 完全にランダムで陣営決定（クライアント希望完全無視）
     import random
     assigned_faction = random.choice(['Attacker', 'Escort'])
     
-    print(f"[FACTION ASSIGNMENT] Client IP: {client_ip}, Preferred: {preferred_faction}, Assigned: {assigned_faction} (RANDOM)")
+    print(f"[FACTION ASSIGNMENT] Client IP: {client_ip}, Assigned: {assigned_faction} (SERVER-DRIVEN RANDOM)")
     return assigned_faction
 
 
@@ -656,32 +655,82 @@ def get_client_ip(request):
     """
     HTTPリクエストから正しいクライアントIPアドレスを取得する
     プロキシやロードバランサー経由の場合も考慮
+    全ての可能性をデバッグ出力する
     """
-    # X-Forwarded-For ヘッダーを確認（最も一般的）
+    debug_info = {}
+    
+    # 1. X-Forwarded-For ヘッダーを確認（最も一般的）
     forwarded_for = request.headers.get("X-Forwarded-For", "").strip()
-    if forwarded_for:
-        # 複数のIPがカンマ区切りで入っている場合、最初のものがクライアントIP
-        client_ip = forwarded_for.split(',')[0].strip()
-        if client_ip:
-            return client_ip
+    debug_info["X-Forwarded-For"] = forwarded_for
     
-    # X-Real-IP ヘッダーを確認
+    # 2. X-Real-IP ヘッダーを確認
     real_ip = request.headers.get("X-Real-IP", "").strip()
-    if real_ip:
-        return real_ip
+    debug_info["X-Real-IP"] = real_ip
     
-    # X-Forwarded-Proto と組み合わせてチェック
+    # 3. CF-Connecting-IP ヘッダー（Cloudflare）
     cf_connecting_ip = request.headers.get("CF-Connecting-IP", "").strip()
-    if cf_connecting_ip:
-        return cf_connecting_ip
+    debug_info["CF-Connecting-IP"] = cf_connecting_ip
     
-    # 他の一般的なヘッダーもチェック
+    # 4. X-Client-IP ヘッダー
     x_client_ip = request.headers.get("X-Client-IP", "").strip()
-    if x_client_ip:
-        return x_client_ip
+    debug_info["X-Client-IP"] = x_client_ip
     
-    # 最後の手段として remote_address を使用（これがサーバーIPになっている可能性あり）
-    return getattr(request, 'remote_address', 'unknown')
+    # 5. X-Original-Forwarded-For ヘッダー
+    x_original_forwarded = request.headers.get("X-Original-Forwarded-For", "").strip()
+    debug_info["X-Original-Forwarded-For"] = x_original_forwarded
+    
+    # 6. X-Cluster-Client-IP ヘッダー
+    x_cluster_ip = request.headers.get("X-Cluster-Client-IP", "").strip()
+    debug_info["X-Cluster-Client-IP"] = x_cluster_ip
+    
+    # 7. True-Client-IP ヘッダー
+    true_client_ip = request.headers.get("True-Client-IP", "").strip()
+    debug_info["True-Client-IP"] = true_client_ip
+    
+    # 8. X-Originating-IP ヘッダー
+    x_originating_ip = request.headers.get("X-Originating-IP", "").strip()
+    debug_info["X-Originating-IP"] = x_originating_ip
+    
+    # 9. remote_address プロパティ
+    remote_address = getattr(request, 'remote_address', 'unknown')
+    debug_info["remote_address"] = remote_address
+    
+    # 10. 追加のrequest属性チェック
+    client_address = getattr(request, 'client_address', None)
+    debug_info["client_address"] = str(client_address) if client_address else None
+    
+    # 11. socket関連のアドレス
+    socket_addr = getattr(getattr(request, 'transport', None), 'get_extra_info', lambda x: None)('peername')
+    debug_info["socket_peername"] = str(socket_addr) if socket_addr else None
+    
+    # すべてのヘッダーをログ出力
+    print(f"[IP DEBUG] All headers: {dict(request.headers)}")
+    print(f"[IP DEBUG] Potential IP sources: {debug_info}")
+    
+    # 優先順位で決定
+    ip_candidates = [
+        (forwarded_for.split(',')[0].strip() if forwarded_for else None, "X-Forwarded-For"),
+        (real_ip, "X-Real-IP"),
+        (cf_connecting_ip, "CF-Connecting-IP"),
+        (true_client_ip, "True-Client-IP"),
+        (x_client_ip, "X-Client-IP"),
+        (x_original_forwarded, "X-Original-Forwarded-For"),
+        (x_cluster_ip, "X-Cluster-Client-IP"),
+        (x_originating_ip, "X-Originating-IP"),
+        (remote_address, "remote_address"),
+        (str(client_address[0]) if client_address and len(client_address) > 0 else None, "client_address"),
+        (str(socket_addr[0]) if socket_addr and len(socket_addr) > 0 else None, "socket_peername")
+    ]
+    
+    # 有効なIPアドレスを見つける
+    for ip, source in ip_candidates:
+        if ip and ip != 'unknown' and ip != 'None':
+            print(f"[IP SELECTED] Using IP: {ip} from source: {source}")
+            return ip
+    
+    # 最終フォールバック
+    print(f"[IP FALLBACK] No valid IP found, using 'unknown'")
+    return 'unknown'
 
 
 def process_request(connection, request):
@@ -711,11 +760,8 @@ def process_request(connection, request):
         client_ip = get_client_ip(request)
         print(f"[DEBUG] Client IP detection - Headers: X-Forwarded-For='{request.headers.get('X-Forwarded-For', 'None')}', X-Real-IP='{request.headers.get('X-Real-IP', 'None')}', Detected IP='{client_ip}'")
         
-        # クライアントからの陣営希望（参考程度）
-        preferred_faction = request.headers.get("digitaltwin-preferred-faction", "").strip()
-        
-        # サーバー側で最終的な陣営を決定
-        assigned_faction = determine_player_faction(client_ip, preferred_faction)
+        # サーバー側で完全に陣営を決定（クライアント希望は無視）
+        assigned_faction = determine_player_faction(client_ip)
         connection.user_faction = assigned_faction
         connection.user_ip = client_ip  # デバッグ用: IPアドレスをconnectionに保存
     except ValueError as e:
