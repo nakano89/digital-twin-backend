@@ -161,9 +161,8 @@ async def handler(connection):
 
     # プレイヤーオブジェクトを作成してグローバル辞書に追加
     if hasattr(connection, 'user_name'):
-        # 暫定的な陣営設定 - 削除予定
-        # TODO: より高度な陣営システムに置き換える予定
-        player_faction = 'Attack'  # デフォルトはAttack陣営
+        # クライアント指定があればそれを優先、無ければデフォルトAttack
+        player_faction = getattr(connection, 'user_faction', None) or 'Attack'
         player = Player(connection.user_name,
                         connection.user_x, connection.user_y, faction=player_faction)
         players[connection.user_name] = player
@@ -435,6 +434,10 @@ def process_request(connection, request):
             request.headers.get("digitaltwin-user-x", "0"))
         connection.user_y = float(
             request.headers.get("digitaltwin-user-y", "0"))
+        # クライアントからの陣営指定（任意）
+        client_faction = request.headers.get("digitaltwin-user-faction", "").strip()
+        if client_faction in ("Escort", "Attack"):
+            connection.user_faction = client_faction
     except ValueError as e:
         print(f"Invalid coordinate values: {e}")
         return connection.respond(http.HTTPStatus.BAD_REQUEST, "Invalid coordinate values\n")
