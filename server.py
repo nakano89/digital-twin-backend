@@ -6,6 +6,7 @@ import asyncio
 import http
 from websockets.asyncio.server import broadcast, serve
 import uuid
+import ipaddress
 
 # 福沢先生を原点とする
 origin_lat = 35.388469
@@ -79,6 +80,7 @@ def get_faction_scores():
 def determine_player_faction(client_ip):
     """
     プレイヤーの陣営をサーバー側で決定する（完全サーバー主導）
+    IPアドレス範囲による大学内外判定を実装
     
     Args:
         client_ip (str): クライアントのIPアドレス
@@ -86,33 +88,62 @@ def determine_player_faction(client_ip):
     Returns:
         str: 決定された陣営 ('Attacker' または 'Escort')
     """
-    # TODO: 将来的にIP範囲による大学内外判定を実装
-    # 例: 133.xxx.xxx.xxx が慶應大学のIPの場合
-    # if is_keio_university_ip(client_ip):
-    #     return 'Escort'  # 大学内はEscort
-    # else:
-    #     return 'Attacker'  # 大学外はAttacker
+    # IPアドレス範囲による大学内外判定
+    if is_keio_university_ip(client_ip):
+        assigned_faction = 'Escort'  # 大学内（133.27.0.0/16）はEscort
+        assignment_reason = "UNIVERSITY INTERNAL"
+    else:
+        assigned_faction = 'Attacker'  # 大学外はAttacker
+        assignment_reason = "EXTERNAL"
     
-    # デバッグ: 完全にランダムで陣営決定（クライアント希望完全無視）
-    import random
-    assigned_faction = random.choice(['Attacker', 'Escort'])
-    
-    print(f"[FACTION ASSIGNMENT] Client IP: {client_ip}, Assigned: {assigned_faction} (SERVER-DRIVEN RANDOM)")
+    print(f"[FACTION ASSIGNMENT] Client IP: {client_ip}, Assigned: {assigned_faction} ({assignment_reason})")
     return assigned_faction
 
 
-def is_keio_university_ip(ip_address):
+def is_keio_university_ip(ip_address_str):
     """
-    慶應大学のIPアドレスかどうかを判定する（将来実装用）
+    慶應大学のIPアドレスかどうかを判定する
+    IPv4とIPv6の両方に対応
     
     Args:
-        ip_address (str): IPアドレス
+        ip_address_str (str): IPアドレス文字列
     
     Returns:
-        bool: True if university IP, False otherwise
+        bool: True if university IP (133.27.0.0/16), False otherwise
     """
-    # TODO: 実際の大学IPレンジを設定
-    # 例: return ip_address.startswith('133.')
+    if not ip_address_str or ip_address_str in ['unknown', 'None', 'none', '']:
+        return False
+    
+    try:
+        # IPアドレスオブジェクトとして解析
+        ip = ipaddress.ip_address(ip_address_str)
+        
+        # 慶應大学のIPアドレス範囲: 133.27.0.0/16
+        keio_network = ipaddress.ip_network('133.27.0.0/16')
+        
+        # IPv4の場合は直接チェック
+        if isinstance(ip, ipaddress.IPv4Address):
+            is_keio = ip in keio_network
+            print(f"[IP RANGE CHECK] IPv4 {ip} in {keio_network}: {is_keio}")
+            return is_keio
+        
+        # IPv6の場合はIPv4マッピングアドレスかチェック
+        elif isinstance(ip, ipaddress.IPv6Address):
+            if ip.ipv4_mapped:
+                # IPv4マッピングアドレス（::ffff:x.x.x.x）の場合
+                ipv4_part = ip.ipv4_mapped
+                is_keio = ipv4_part in keio_network
+                print(f"[IP RANGE CHECK] IPv6-mapped IPv4 {ipv4_part} in {keio_network}: {is_keio}")
+                return is_keio
+            else:
+                # 純粋なIPv6の場合は大学外とみなす（現在のところ）
+                print(f"[IP RANGE CHECK] Pure IPv6 {ip}: False (not in university range)")
+                return False
+        
+    except (ipaddress.AddressValueError, ValueError) as e:
+        print(f"[IP RANGE CHECK] Invalid IP address '{ip_address_str}': {e}")
+        return False
+    
     return False
 
 
@@ -152,7 +183,7 @@ class Entity:
 
 
 class Player(Entity):
-    def __init__(self, uid, name, x, y, h, score=0, hp=100, faction='Attack', ip_address='unknown', ip_debug_info=None):
+    def __init__(self, uid, name, x, y, h, score=0, hp=100, faction='Attack', ip_address='unknown'):
         super().__init__(entity_id=name, x=x, y=y, hp=hp)
         self.uid = uid
         self.name = name
@@ -163,8 +194,7 @@ class Player(Entity):
         # 暫定的な陣営設定 - 削除予定
         # TODO: より高度な陣営システムに置き換える予定
         self.faction = faction
-        self.ip_address = ip_address  # デバッグ用: クライアントIPアドレス
-        self.ip_debug_info = ip_debug_info or {}  # デバッグ用: すべてのIP候補情報
+        self.ip_address = ip_address  # TODO: 本番運用時には削除予定（デバッグ用）
 
     def update_position(self, x, y):
         self.x = round_digits(x)
@@ -174,7 +204,7 @@ class Player(Entity):
 
     def to_dict(self):
         """JSONシリアライゼーション用の辞書形式変換"""
-        result = {
+        return {
             "uid": self.uid,
             "name": self.name,
             "x": self.x,
@@ -187,16 +217,8 @@ class Player(Entity):
             "max_hp": self.max_hp,
             "is_alive": self.is_alive,
             "faction": self.faction,
-            "ip_address": self.ip_address  # デバッグ用: IPアドレス情報
+            "ip_address": self.ip_address  # TODO: 本番運用時には削除予定（デバッグ用）
         }
-        
-        # すべてのIP候補情報をJSONに追加（デバッグ用）
-        if hasattr(self, 'ip_debug_info') and self.ip_debug_info:
-            for key, value in self.ip_debug_info.items():
-                # "ip_"プレフィックスを付けてクライアントが見やすくする
-                result[f"ip_{key}"] = value
-        
-        return result
 
     def increment_score(self):
         """スコアを1増加させる"""
@@ -281,10 +303,9 @@ async def handler(connection):
         # クライアント指定があればそれを優先、無ければNone
         player_faction = getattr(connection, 'user_faction', None)
         player_ip = getattr(connection, 'user_ip', 'unknown')
-        player_ip_debug_info = getattr(connection, 'user_ip_debug_info', {})
         player = Player(player_uid, connection.user_name,
                         connection.user_x, connection.user_y, 5.0, faction=player_faction, 
-                        ip_address=player_ip, ip_debug_info=player_ip_debug_info)
+                        ip_address=player_ip)
         players[player_uid] = player
         # 接続先にのみwelcomeメッセージでUIDと確定陣営を通知
         try:
@@ -717,10 +738,6 @@ def get_client_ip(request):
     socket_addr = getattr(getattr(request, 'transport', None), 'get_extra_info', lambda x: None)('peername')
     debug_info["socket_peername"] = str(socket_addr) if socket_addr else None
     
-    # すべてのヘッダーをログ出力
-    print(f"[IP DEBUG] All headers: {dict(request.headers)}")
-    print(f"[IP DEBUG] Potential IP sources: {debug_info}")
-    
     # 優先順位で決定
     ip_candidates = [
         (forwarded_for.split(',')[0].strip() if forwarded_for else None, "X-Forwarded-For"),
@@ -744,16 +761,10 @@ def get_client_ip(request):
         if ip and ip != 'unknown' and ip != 'None':
             selected_ip = ip
             selected_source = source
-            print(f"[IP SELECTED] Using IP: {ip} from source: {source}")
             break
     
-    if selected_ip == 'unknown':
-        print(f"[IP FALLBACK] No valid IP found, using 'unknown'")
-    
-    # デバッグ用の詳細情報も追加
-    debug_info["selected_ip"] = selected_ip
-    debug_info["selected_source"] = selected_source
-    debug_info["all_headers"] = dict(request.headers)
+    # TODO: 本番運用時には削除予定（デバッグ用ログ出力）
+    print(f"[IP DEBUG] Selected: {selected_ip} from {selected_source}")
     
     return selected_ip, debug_info
 
@@ -781,15 +792,14 @@ def process_request(connection, request):
         # サーバ発行の一意UIDを割当
         connection.user_uid = str(uuid.uuid4())
         
-        # クライアントIPアドレスを正しく取得（詳細情報付き）
-        client_ip, ip_debug_info = get_client_ip(request)
-        print(f"[DEBUG] Client IP detection - Headers: X-Forwarded-For='{request.headers.get('X-Forwarded-For', 'None')}', X-Real-IP='{request.headers.get('X-Real-IP', 'None')}', Detected IP='{client_ip}'")
+        # クライアントIPアドレスを取得
+        client_ip, _ = get_client_ip(request)  # 詳細情報は破棄
+        print(f"[DEBUG] Client IP: {client_ip}")
         
         # サーバー側で完全に陣営を決定（クライアント希望は無視）
         assigned_faction = determine_player_faction(client_ip)
         connection.user_faction = assigned_faction
-        connection.user_ip = client_ip  # デバッグ用: IPアドレスをconnectionに保存
-        connection.user_ip_debug_info = ip_debug_info  # デバッグ用: すべてのIP候補情報をconnectionに保存
+        connection.user_ip = client_ip  # TODO: 本番運用時には削除予定（デバッグ用）
     except ValueError as e:
         print(f"Invalid coordinate values: {e}")
         return connection.respond(http.HTTPStatus.BAD_REQUEST, "Invalid coordinate values\n")
