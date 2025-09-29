@@ -82,7 +82,7 @@ def determine_player_faction(client_ip, preferred_faction=None):
     
     Args:
         client_ip (str): クライアントのIPアドレス
-        preferred_faction (str): クライアントが希望する陣営（参考程度）
+        preferred_faction (str): クライアントが希望する陣営（参考程度、現在は無視）
     
     Returns:
         str: 決定された陣営 ('Attacker' または 'Escort')
@@ -94,16 +94,11 @@ def determine_player_faction(client_ip, preferred_faction=None):
     # else:
     #     return 'Attacker'  # 大学外はAttacker
     
-    # 暫定: クライアントの希望を参考にしつつサーバーが決定
-    if preferred_faction in ('Attack', 'Attacker'):
-        assigned_faction = 'Attacker'
-    elif preferred_faction in ('Escort', 'Escort'):
-        assigned_faction = 'Escort'
-    else:
-        # デフォルトはEscort
-        assigned_faction = 'Escort'
+    # デバッグ: 完全にランダムで陣営決定（クライアント申告無視）
+    import random
+    assigned_faction = random.choice(['Attacker', 'Escort'])
     
-    print(f"[FACTION ASSIGNMENT] Client IP: {client_ip}, Preferred: {preferred_faction}, Assigned: {assigned_faction}")
+    print(f"[FACTION ASSIGNMENT] Client IP: {client_ip}, Preferred: {preferred_faction}, Assigned: {assigned_faction} (RANDOM)")
     return assigned_faction
 
 
@@ -158,7 +153,7 @@ class Entity:
 
 
 class Player(Entity):
-    def __init__(self, uid, name, x, y, h, score=0, hp=100, faction='Attack'):
+    def __init__(self, uid, name, x, y, h, score=0, hp=100, faction='Attack', ip_address='unknown'):
         super().__init__(entity_id=name, x=x, y=y, hp=hp)
         self.uid = uid
         self.name = name
@@ -169,6 +164,7 @@ class Player(Entity):
         # 暫定的な陣営設定 - 削除予定
         # TODO: より高度な陣営システムに置き換える予定
         self.faction = faction
+        self.ip_address = ip_address  # デバッグ用: クライアントIPアドレス
 
     def update_position(self, x, y):
         self.x = round_digits(x)
@@ -190,7 +186,8 @@ class Player(Entity):
             "hp": self.hp,
             "max_hp": self.max_hp,
             "is_alive": self.is_alive,
-            "faction": self.faction
+            "faction": self.faction,
+            "ip_address": self.ip_address  # デバッグ用: IPアドレス情報
         }
 
     def increment_score(self):
@@ -275,8 +272,9 @@ async def handler(connection):
     if hasattr(connection, 'user_name'):
         # クライアント指定があればそれを優先、無ければNone
         player_faction = getattr(connection, 'user_faction', None)
+        player_ip = getattr(connection, 'user_ip', 'unknown')
         player = Player(player_uid, connection.user_name,
-                        connection.user_x, connection.user_y, 5.0, faction=player_faction)
+                        connection.user_x, connection.user_y, 5.0, faction=player_faction, ip_address=player_ip)
         players[player_uid] = player
         # 接続先にのみwelcomeメッセージでUIDと確定陣営を通知
         try:
@@ -686,6 +684,7 @@ def process_request(connection, request):
         # サーバー側で最終的な陣営を決定
         assigned_faction = determine_player_faction(client_ip, preferred_faction)
         connection.user_faction = assigned_faction
+        connection.user_ip = client_ip  # デバッグ用: IPアドレスをconnectionに保存
     except ValueError as e:
         print(f"Invalid coordinate values: {e}")
         return connection.respond(http.HTTPStatus.BAD_REQUEST, "Invalid coordinate values\n")
