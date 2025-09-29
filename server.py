@@ -652,6 +652,38 @@ async def broadcast_json(lidar2person_queue):
         await asyncio.sleep(0.001)
 
 
+def get_client_ip(request):
+    """
+    HTTPリクエストから正しいクライアントIPアドレスを取得する
+    プロキシやロードバランサー経由の場合も考慮
+    """
+    # X-Forwarded-For ヘッダーを確認（最も一般的）
+    forwarded_for = request.headers.get("X-Forwarded-For", "").strip()
+    if forwarded_for:
+        # 複数のIPがカンマ区切りで入っている場合、最初のものがクライアントIP
+        client_ip = forwarded_for.split(',')[0].strip()
+        if client_ip:
+            return client_ip
+    
+    # X-Real-IP ヘッダーを確認
+    real_ip = request.headers.get("X-Real-IP", "").strip()
+    if real_ip:
+        return real_ip
+    
+    # X-Forwarded-Proto と組み合わせてチェック
+    cf_connecting_ip = request.headers.get("CF-Connecting-IP", "").strip()
+    if cf_connecting_ip:
+        return cf_connecting_ip
+    
+    # 他の一般的なヘッダーもチェック
+    x_client_ip = request.headers.get("X-Client-IP", "").strip()
+    if x_client_ip:
+        return x_client_ip
+    
+    # 最後の手段として remote_address を使用（これがサーバーIPになっている可能性あり）
+    return getattr(request, 'remote_address', 'unknown')
+
+
 def process_request(connection, request):
     if request.path == "/healthz":
         return connection.respond(http.HTTPStatus.OK, "OK\n")
@@ -675,8 +707,9 @@ def process_request(connection, request):
         # サーバ発行の一意UIDを割当
         connection.user_uid = str(uuid.uuid4())
         
-        # クライアントIPアドレスを取得
-        client_ip = getattr(connection, 'remote_address', ['unknown'])[0] if hasattr(connection, 'remote_address') else 'unknown'
+        # クライアントIPアドレスを正しく取得
+        client_ip = get_client_ip(request)
+        print(f"[DEBUG] Client IP detection - Headers: X-Forwarded-For='{request.headers.get('X-Forwarded-For', 'None')}', X-Real-IP='{request.headers.get('X-Real-IP', 'None')}', Detected IP='{client_ip}'")
         
         # クライアントからの陣営希望（参考程度）
         preferred_faction = request.headers.get("digitaltwin-preferred-faction", "").strip()
