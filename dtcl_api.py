@@ -17,6 +17,7 @@ from awscrt import auth, io, mqtt
 from awscrt.exceptions import AwsCrtError
 from awsiot import mqtt_connection_builder
 
+
 # Refresh Token
 refresh_token = os.environ["DTCL_REFRESH_TOKEN"]  ########## 変更 ##########
 # Region
