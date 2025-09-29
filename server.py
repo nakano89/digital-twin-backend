@@ -152,7 +152,7 @@ class Entity:
 
 
 class Player(Entity):
-    def __init__(self, uid, name, x, y, h, score=0, hp=100, faction='Attack', ip_address='unknown'):
+    def __init__(self, uid, name, x, y, h, score=0, hp=100, faction='Attack', ip_address='unknown', ip_debug_info=None):
         super().__init__(entity_id=name, x=x, y=y, hp=hp)
         self.uid = uid
         self.name = name
@@ -164,6 +164,7 @@ class Player(Entity):
         # TODO: より高度な陣営システムに置き換える予定
         self.faction = faction
         self.ip_address = ip_address  # デバッグ用: クライアントIPアドレス
+        self.ip_debug_info = ip_debug_info or {}  # デバッグ用: すべてのIP候補情報
 
     def update_position(self, x, y):
         self.x = round_digits(x)
@@ -173,7 +174,7 @@ class Player(Entity):
 
     def to_dict(self):
         """JSONシリアライゼーション用の辞書形式変換"""
-        return {
+        result = {
             "uid": self.uid,
             "name": self.name,
             "x": self.x,
@@ -188,6 +189,14 @@ class Player(Entity):
             "faction": self.faction,
             "ip_address": self.ip_address  # デバッグ用: IPアドレス情報
         }
+        
+        # すべてのIP候補情報をJSONに追加（デバッグ用）
+        if hasattr(self, 'ip_debug_info') and self.ip_debug_info:
+            for key, value in self.ip_debug_info.items():
+                # "ip_"プレフィックスを付けてクライアントが見やすくする
+                result[f"ip_{key}"] = value
+        
+        return result
 
     def increment_score(self):
         """スコアを1増加させる"""
@@ -272,8 +281,10 @@ async def handler(connection):
         # クライアント指定があればそれを優先、無ければNone
         player_faction = getattr(connection, 'user_faction', None)
         player_ip = getattr(connection, 'user_ip', 'unknown')
+        player_ip_debug_info = getattr(connection, 'user_ip_debug_info', {})
         player = Player(player_uid, connection.user_name,
-                        connection.user_x, connection.user_y, 5.0, faction=player_faction, ip_address=player_ip)
+                        connection.user_x, connection.user_y, 5.0, faction=player_faction, 
+                        ip_address=player_ip, ip_debug_info=player_ip_debug_info)
         players[player_uid] = player
         # 接続先にのみwelcomeメッセージでUIDと確定陣営を通知
         try:
@@ -656,6 +667,9 @@ def get_client_ip(request):
     HTTPリクエストから正しいクライアントIPアドレスを取得する
     プロキシやロードバランサー経由の場合も考慮
     全ての可能性をデバッグ出力する
+    
+    Returns:
+        tuple: (selected_ip, all_ip_debug_info)
     """
     debug_info = {}
     
@@ -723,14 +737,25 @@ def get_client_ip(request):
     ]
     
     # 有効なIPアドレスを見つける
+    selected_ip = 'unknown'
+    selected_source = 'none'
+    
     for ip, source in ip_candidates:
         if ip and ip != 'unknown' and ip != 'None':
+            selected_ip = ip
+            selected_source = source
             print(f"[IP SELECTED] Using IP: {ip} from source: {source}")
-            return ip
+            break
     
-    # 最終フォールバック
-    print(f"[IP FALLBACK] No valid IP found, using 'unknown'")
-    return 'unknown'
+    if selected_ip == 'unknown':
+        print(f"[IP FALLBACK] No valid IP found, using 'unknown'")
+    
+    # デバッグ用の詳細情報も追加
+    debug_info["selected_ip"] = selected_ip
+    debug_info["selected_source"] = selected_source
+    debug_info["all_headers"] = dict(request.headers)
+    
+    return selected_ip, debug_info
 
 
 def process_request(connection, request):
@@ -756,14 +781,15 @@ def process_request(connection, request):
         # サーバ発行の一意UIDを割当
         connection.user_uid = str(uuid.uuid4())
         
-        # クライアントIPアドレスを正しく取得
-        client_ip = get_client_ip(request)
+        # クライアントIPアドレスを正しく取得（詳細情報付き）
+        client_ip, ip_debug_info = get_client_ip(request)
         print(f"[DEBUG] Client IP detection - Headers: X-Forwarded-For='{request.headers.get('X-Forwarded-For', 'None')}', X-Real-IP='{request.headers.get('X-Real-IP', 'None')}', Detected IP='{client_ip}'")
         
         # サーバー側で完全に陣営を決定（クライアント希望は無視）
         assigned_faction = determine_player_faction(client_ip)
         connection.user_faction = assigned_faction
         connection.user_ip = client_ip  # デバッグ用: IPアドレスをconnectionに保存
+        connection.user_ip_debug_info = ip_debug_info  # デバッグ用: すべてのIP候補情報をconnectionに保存
     except ValueError as e:
         print(f"Invalid coordinate values: {e}")
         return connection.respond(http.HTTPStatus.BAD_REQUEST, "Invalid coordinate values\n")
