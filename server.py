@@ -25,11 +25,33 @@ players = {}  # player_name -> Player object
 visitors = {}  # visitor_id -> Visitor object
 visitor_hit_id_cache = {}  # visitor_id -> set of processed hit ids (bounded)
 
+# ゲームイベント管理
+recent_events = []  # 最近のキル・ダメージイベントのリスト（クライアント配信用）
+MAX_EVENTS = 50  # 保持する最大イベント数
+
 DIGITS = 3
 
 
 def round_digits(x):
     return float(f"{x:.{DIGITS}f}")
+
+
+def add_game_event(event_type, shooter, target, damage=0, extra_info=None):
+    """ゲームイベント（キル・ダメージ）をリストに追加"""
+    global recent_events
+    event = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "type": event_type,  # "kill" or "damage"
+        "shooter": shooter,
+        "target": target,
+        "damage": damage,
+        "extra_info": extra_info or {}
+    }
+    recent_events.append(event)
+    
+    # 最大数を超えたら古いものを削除
+    if len(recent_events) > MAX_EVENTS:
+        recent_events = recent_events[-MAX_EVENTS:]
 
 
 class Entity:
@@ -72,6 +94,8 @@ class Player(Entity):
         super().__init__(entity_id=name, x=x, y=y, hp=hp)
         self.name = name
         self.score = score
+        self.player_kills = 0    # 新規: プレイヤーキル数
+        self.visitor_kills = 0   # 新規: ビジターキル数
         # 暫定的な陣営設定 - 削除予定
         # TODO: より高度な陣営システムに置き換える予定
         self.faction = faction
@@ -89,6 +113,8 @@ class Player(Entity):
             "x": self.x,
             "y": self.y,
             "score": self.score,
+            "player_kills": self.player_kills,
+            "visitor_kills": self.visitor_kills,
             "hp": self.hp,
             "max_hp": self.max_hp,
             "is_alive": self.is_alive
@@ -97,6 +123,14 @@ class Player(Entity):
     def increment_score(self):
         """スコアを1増加させる"""
         self.score += 1
+    
+    def increment_player_kills(self):
+        """プレイヤーキル数を1増加させる"""
+        self.player_kills += 1
+    
+    def increment_visitor_kills(self):
+        """ビジターキル数を1増加させる"""
+        self.visitor_kills += 1
 
 
 class Visitor(Entity):
@@ -215,11 +249,17 @@ async def handler(connection):
                             # プレイヤーのスコアを増加
                             if hasattr(connection, 'user_name') and connection.user_name in players:
                                 players[connection.user_name].increment_score()
+                                players[connection.user_name].increment_visitor_kills()  # 新規: ビジターキル数増加
                                 connection.user_score = players[connection.user_name].score
                             else:
                                 connection.user_score += 1
-                            print(
-                                f"Visitor {visitor_id} killed by {getattr(connection, 'user_name', 'Unknown')}")
+                            killer_name = getattr(connection, 'user_name', 'Unknown')
+                            print(f"🔥 VISITOR KILL: {killer_name} killed Visitor {visitor_id} "
+                                  f"(Visitor kills: {players[connection.user_name].visitor_kills})")
+                            
+                            # イベント記録
+                            add_game_event("kill", killer_name, f"Visitor_{visitor_id}", 
+                                         extra_info={"target_type": "visitor", "killer_visitor_kills": players[connection.user_name].visitor_kills})
                 except ValueError:
                     print(f"Invalid visitor ID format: {visitor}")
                     continue
@@ -275,7 +315,7 @@ async def handler(connection):
                                 target_id, set())
                             if hit_id in cache:
                                 continue
-                            cache.add(hit_id)
+                            cache.add(hit_id)＠
                             if len(cache) > 512:
                                 # サイズ制限（古いものから削除）
                                 try:
@@ -316,11 +356,45 @@ async def handler(connection):
                             # 初めてのキル
                             target_entity.killed_by = shooter_id
                             target_entity.death_time = datetime.datetime.now()
-                            # スコア加算
+                            # スコア加算とキル数増加
                             if shooter_id in players:
                                 players[shooter_id].increment_score()
-                        print(
-                            f"Damage applied: target={target_id_str}, dmg={damage}, hp={target_entity.hp}, alive={target_entity.is_alive}, by={shooter_id}")
+                                # キルタイプを判別してカウンター増加
+                                if isinstance(target_entity, Visitor):
+                                    players[shooter_id].increment_visitor_kills()  # ビジターキル
+                                elif isinstance(target_entity, Player):
+                                    players[shooter_id].increment_player_kills()   # プレイヤーキル
+                        # ダメージログ表示とイベント記録
+                        if (not after_alive) and before_alive:
+                            # キル発生時の詳細ログ
+                            if isinstance(target_entity, Visitor):
+                                killer_player = players.get(shooter_id)
+                                visitor_kills = killer_player.visitor_kills if killer_player else "?"
+                                print(f"💀 VISITOR KILL: {shooter_id} killed Visitor {target_id_str} "
+                                      f"(dmg={damage}) [Visitor kills: {visitor_kills}]")
+                                
+                                # イベント記録
+                                add_game_event("kill", shooter_id, f"Visitor_{target_id_str}", damage,
+                                             {"target_type": "visitor", "killer_visitor_kills": visitor_kills})
+                                             
+                            elif isinstance(target_entity, Player):
+                                killer_player = players.get(shooter_id)
+                                player_kills = killer_player.player_kills if killer_player else "?"
+                                print(f"💀 PLAYER KILL: {shooter_id} killed Player {target_id_str} "
+                                      f"(dmg={damage}) [Player kills: {player_kills}]")
+                                
+                                # イベント記録
+                                add_game_event("kill", shooter_id, target_id_str, damage,
+                                             {"target_type": "player", "killer_player_kills": player_kills})
+                        else:
+                            # 通常のダメージログ
+                            print(f"⚔️ DAMAGE: {shooter_id} → {target_id_str} "
+                                  f"(dmg={damage}, hp={target_entity.hp}/{target_entity.max_hp})")
+                            
+                            # ダメージイベント記録
+                            target_type = "visitor" if isinstance(target_entity, Visitor) else "player"
+                            add_game_event("damage", shooter_id, target_id_str, damage,
+                                         {"target_type": target_type, "remaining_hp": target_entity.hp})
                     except Exception as e:
                         print(f"Invalid damage report: {e}")
 
@@ -420,6 +494,7 @@ async def broadcast_json(lidar2person_queue):
             "untouched_visitors": alive_visitors,  # Unityクライアント互換性のため
             "visitors": visitors_full,  # 新: version/HP/生死
             "players": players_list,
+            "recent_events": recent_events[-10:] if recent_events else [],  # 最新10件のイベント
         }
         broadcast(server.connections, json.dumps(sending_data))
 

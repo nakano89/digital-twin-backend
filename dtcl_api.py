@@ -11,11 +11,14 @@ import time
 import os  ########## 追記 ##########
 from pprint import pprint
 from uuid import uuid4
+from dotenv import load_dotenv
 
 import boto3
 from awscrt import auth, io, mqtt
 from awscrt.exceptions import AwsCrtError
 from awsiot import mqtt_connection_builder
+
+load_dotenv()
 
 
 # Refresh Token
