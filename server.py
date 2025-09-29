@@ -21,7 +21,8 @@ lastest_lidar_date = datetime.datetime.now(ZoneInfo("Asia/Tokyo"))
 lastest_received_visitors_id = set()
 
 # エンティティ管理用辞書
-players = {}  # player_name -> Player object
+# プレイヤーは一意UIDで管理し、表示名（重複可）は属性として保持
+players = {}  # player_uid -> Player object
 visitors = {}  # visitor_id -> Visitor object
 visitor_hit_id_cache = {}  # visitor_id -> set of processed hit ids (bounded)
 
@@ -90,8 +91,9 @@ class Entity:
 
 
 class Player(Entity):
-    def __init__(self, name, x=0, y=0, score=0, hp=100, faction='Attack'):
+    def __init__(self, uid, name, x=0, y=0, score=0, hp=100, faction='Attack'):
         super().__init__(entity_id=name, x=x, y=y, hp=hp)
+        self.uid = uid
         self.name = name
         self.score = score
         self.player_kills = 0    # 新規: プレイヤーキル数
@@ -109,6 +111,7 @@ class Player(Entity):
     def to_dict(self):
         """JSONシリアライゼーション用の辞書形式変換"""
         return {
+            "uid": self.uid,
             "name": self.name,
             "x": self.x,
             "y": self.y,
@@ -194,17 +197,23 @@ class Visitor(Entity):
 
 async def handler(connection):
     player_name = getattr(connection, 'user_name', 'Unknown')
-    print(f"New connection established from {player_name}")
+    player_uid = getattr(connection, 'user_uid', str(uuid.uuid4()))
+    print(f"New connection established from {player_name} (uid={player_uid})")
 
     # プレイヤーオブジェクトを作成してグローバル辞書に追加
     if hasattr(connection, 'user_name'):
         # クライアント指定があればそれを優先、無ければNone
         player_faction = getattr(connection, 'user_faction', None)
-        player = Player(connection.user_name,
+        player = Player(player_uid, connection.user_name,
                         connection.user_x, connection.user_y, faction=player_faction)
-        players[connection.user_name] = player
+        players[player_uid] = player
+        # 接続先にのみwelcomeメッセージでUIDを通知
+        try:
+            await connection.send(json.dumps({"welcome": {"player_uid": player_uid}}))
+        except Exception as e:
+            print(f"Failed to send welcome message: {e}")
         print(
-            f"Player {connection.user_name} joined the game with faction {player_faction}")
+            f"Player {connection.user_name} joined the game with faction {player_faction} (uid={player_uid})")
 
     try:
         while True:
@@ -233,8 +242,8 @@ async def handler(connection):
                 break
 
             # プレイヤーオブジェクトの位置を更新
-            if hasattr(connection, 'user_name') and connection.user_name in players:
-                player = players[connection.user_name]
+            if hasattr(connection, 'user_uid') and connection.user_uid in players:
+                player = players[connection.user_uid]
                 player.update_position(loaded["x"], loaded["y"])
 
             # connectionの属性も更新（後方互換性のため）
@@ -252,10 +261,8 @@ async def handler(connection):
                                 connection, 'user_name', 'Unknown')
 
                             # プレイヤーが存在しない場合は作成
-                            if killer_name not in players:
-                                players[killer_name] = Player(
-                                    killer_name, connection.user_x, connection.user_y, 100, 0, "Attack")
-                                print(f"🆕 新しいプレイヤー作成: {killer_name}")
+                            # 旧仕様のvisitors_being_touched経路は今後廃止予定
+                            # UID導入後はこの経路ではプレイヤー作成しない
 
                             # プレイヤーのスコアとキル数を増加
                             players[killer_name].increment_score()
@@ -301,16 +308,16 @@ async def handler(connection):
                                 print(
                                     f"Processing damage to Visitor {target_id} (faction: {target_faction})")
                         except ValueError:
-                            # プレイヤーIDとして処理
+                            # プレイヤーUIDとして処理
                             if target_id_str in players:
                                 target_entity = players[target_id_str]
                                 target_faction = getattr(
                                     target_entity, 'faction', None)
                                 print(
-                                    f"Processing damage to Player {target_id_str} (faction: {target_faction})")
+                                    f"Processing damage to Player uid={target_id_str} name={target_entity.name} (faction: {target_faction})")
                             else:
                                 print(
-                                    f"Invalid damage report: target not found '{target_id_str}' (available players: {list(players.keys())})")
+                                    f"Invalid damage report: target not found '{target_id_str}' (available player uids: {list(players.keys())})")
                                 continue
 
                         if target_entity is None:
@@ -366,14 +373,7 @@ async def handler(connection):
                             target_entity.killed_by = shooter_id
                             target_entity.death_time = datetime.datetime.now()
 
-                            # プレイヤーが存在しない場合は作成
-                            if shooter_id not in players:
-                                # 接続から位置情報を取得、なければデフォルト値
-                                shooter_x = getattr(connection, 'user_x', 0.0)
-                                shooter_y = getattr(connection, 'user_y', 0.0)
-                                players[shooter_id] = Player(
-                                    shooter_id, shooter_x, shooter_y, 100, 0, "Attack")
-                                print(f"🆕 新しいプレイヤー作成: {shooter_id}")
+                            # UID導入後はサーバ発行以外のプレイヤーを作成しない
 
                             # スコア加算とキル数増加
                             players[shooter_id].increment_score()
@@ -390,7 +390,7 @@ async def handler(connection):
                             if isinstance(target_entity, Visitor):
                                 killer_player = players.get(shooter_id)
                                 visitor_kills = killer_player.visitor_kills if killer_player else "?"
-                                print(f"💀 VISITOR KILL: {shooter_id} killed Visitor {target_id_str} "
+                                print(f"💀 VISITOR KILL: uid={shooter_id} killed Visitor {target_id_str} "
                                       f"(dmg={damage}) [Visitor kills: {visitor_kills}]")
 
                                 # イベント記録
@@ -400,7 +400,7 @@ async def handler(connection):
                             elif isinstance(target_entity, Player):
                                 killer_player = players.get(shooter_id)
                                 player_kills = killer_player.player_kills if killer_player else "?"
-                                print(f"💀 PLAYER KILL: {shooter_id} killed Player {target_id_str} "
+                                print(f"💀 PLAYER KILL: uid={shooter_id} killed Player uid={target_id_str} "
                                       f"(dmg={damage}) [Player kills: {player_kills}]")
 
                                 # イベント記録
@@ -427,9 +427,9 @@ async def handler(connection):
             await asyncio.sleep(0.01)
     finally:
         # プレイヤーが切断したときの清理処理
-        if hasattr(connection, 'user_name') and connection.user_name in players:
-            del players[connection.user_name]
-            print(f"Player {connection.user_name} left the game")
+        if hasattr(connection, 'user_uid') and connection.user_uid in players:
+            left = players.pop(connection.user_uid)
+            print(f"Player {left.name} left the game (uid={connection.user_uid})")
 
 
 async def broadcast_json(lidar2person_queue):
