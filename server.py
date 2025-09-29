@@ -207,7 +207,7 @@ async def handler(connection):
         # クライアント指定があればそれを優先、無ければNone
         player_faction = getattr(connection, 'user_faction', None)
         player = Player(player_uid, connection.user_name,
-                        connection.user_x, connection.user_y, faction=player_faction)
+                        connection.user_x, connection.user_y, 5.0, faction=player_faction)
         players[player_uid] = player
         # 接続先にのみwelcomeメッセージでUIDを通知
         try:
