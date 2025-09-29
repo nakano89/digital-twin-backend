@@ -76,6 +76,52 @@ def get_faction_scores():
     return faction_scores.copy()
 
 
+def determine_player_faction(client_ip, preferred_faction=None):
+    """
+    プレイヤーの陣営をサーバー側で決定する
+    
+    Args:
+        client_ip (str): クライアントのIPアドレス
+        preferred_faction (str): クライアントが希望する陣営（参考程度）
+    
+    Returns:
+        str: 決定された陣営 ('Attacker' または 'Escort')
+    """
+    # TODO: 将来的にIP範囲による大学内外判定を実装
+    # 例: 133.xxx.xxx.xxx が慶應大学のIPの場合
+    # if is_keio_university_ip(client_ip):
+    #     return 'Escort'  # 大学内はEscort
+    # else:
+    #     return 'Attacker'  # 大学外はAttacker
+    
+    # 暫定: クライアントの希望を参考にしつつサーバーが決定
+    if preferred_faction in ('Attack', 'Attacker'):
+        assigned_faction = 'Attacker'
+    elif preferred_faction in ('Escort', 'Escort'):
+        assigned_faction = 'Escort'
+    else:
+        # デフォルトはEscort
+        assigned_faction = 'Escort'
+    
+    print(f"[FACTION ASSIGNMENT] Client IP: {client_ip}, Preferred: {preferred_faction}, Assigned: {assigned_faction}")
+    return assigned_faction
+
+
+def is_keio_university_ip(ip_address):
+    """
+    慶應大学のIPアドレスかどうかを判定する（将来実装用）
+    
+    Args:
+        ip_address (str): IPアドレス
+    
+    Returns:
+        bool: True if university IP, False otherwise
+    """
+    # TODO: 実際の大学IPレンジを設定
+    # 例: return ip_address.startswith('133.')
+    return False
+
+
 class Entity:
     """エンティティの基底クラス - 共通プロパティとメソッドを提供"""
 
@@ -232,9 +278,15 @@ async def handler(connection):
         player = Player(player_uid, connection.user_name,
                         connection.user_x, connection.user_y, 5.0, faction=player_faction)
         players[player_uid] = player
-        # 接続先にのみwelcomeメッセージでUIDを通知
+        # 接続先にのみwelcomeメッセージでUIDと確定陣営を通知
         try:
-            await connection.send(json.dumps({"welcome": {"player_uid": player_uid}}))
+            welcome_message = {
+                "welcome": {
+                    "player_uid": player_uid,
+                    "assigned_faction": player_faction
+                }
+            }
+            await connection.send(json.dumps(welcome_message))
         except Exception as e:
             print(f"Failed to send welcome message: {e}")
         print(
@@ -624,11 +676,16 @@ def process_request(connection, request):
                 f"WARNING: Player {connection.user_name} connecting with invalid initial position ({connection.user_x}, {connection.user_y})")
         # サーバ発行の一意UIDを割当
         connection.user_uid = str(uuid.uuid4())
-        # クライアントからの陣営指定（任意）
-        client_faction = request.headers.get(
-            "digitaltwin-user-faction", "").strip()
-        if client_faction in ("Escort", "Attack"):
-            connection.user_faction = client_faction
+        
+        # クライアントIPアドレスを取得
+        client_ip = getattr(connection, 'remote_address', ['unknown'])[0] if hasattr(connection, 'remote_address') else 'unknown'
+        
+        # クライアントからの陣営希望（参考程度）
+        preferred_faction = request.headers.get("digitaltwin-preferred-faction", "").strip()
+        
+        # サーバー側で最終的な陣営を決定
+        assigned_faction = determine_player_faction(client_ip, preferred_faction)
+        connection.user_faction = assigned_faction
     except ValueError as e:
         print(f"Invalid coordinate values: {e}")
         return connection.respond(http.HTTPStatus.BAD_REQUEST, "Invalid coordinate values\n")
