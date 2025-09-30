@@ -373,38 +373,40 @@ async def handler(connection):
             connection.user_x = loaded["x"]
             connection.user_y = loaded["y"]
 
-            # 旧: 撃破されたvisitorの処理（後方互換）
+            # 旧: 撃破されたvisitorの処理（UID対応版）
             for visitor in loaded["visitors_being_touched"]:
                 try:
                     visitor_id = int(visitor)
                     # visitor_idが存在し、まだ生きているかチェック
                     if visitor_id in visitors and visitors[visitor_id].is_alive:
-                        if visitors[visitor_id].apply_kill_once(getattr(connection, 'user_name', 'Unknown')):
-                            killer_name = getattr(
-                                connection, 'user_name', 'Unknown')
+                        # UIDベースのキラー特定
+                        killer_uid = getattr(connection, 'user_uid', None)
+                        killer_name = getattr(connection, 'user_name', 'Unknown')
+                        
+                        if visitors[visitor_id].apply_kill_once(killer_uid):
+                            # UID管理システムでプレイヤーを特定
+                            if killer_uid and killer_uid in players:
+                                killer_player = players[killer_uid]
+                                
+                                # プレイヤーのスコアとキル数を増加
+                                killer_player.increment_score()
+                                killer_player.increment_visitor_kills()
+                                connection.user_score = killer_player.score
 
-                            # プレイヤーが存在しない場合は作成
-                            # 旧仕様のvisitors_being_touched経路は今後廃止予定
-                            # UID導入後はこの経路ではプレイヤー作成しない
+                                # 陣営スコア更新
+                                killer_faction = killer_player.faction
+                                if killer_faction == 'Attacker' or killer_faction == 'Attack':
+                                    update_faction_score('Attacker', 1)
+                                    visitors[visitor_id].score_processed = True
 
-                            # プレイヤーのスコアとキル数を増加
-                            players[killer_name].increment_score()
-                            # ビジターキル数増加
-                            players[killer_name].increment_visitor_kills()
-                            connection.user_score = players[killer_name].score
+                                print(f"[VISITOR KILL] {killer_name} (uid={killer_uid}) killed Visitor {visitor_id} "
+                                      f"(Visitor kills: {killer_player.visitor_kills}, Score: {killer_player.score})")
 
-                            # 旧式キル処理でも陣営スコア更新（後方互換性）
-                            killer_faction = players[killer_name].faction
-                            if killer_faction == 'Attacker' or killer_faction == 'Attack':
-                                update_faction_score('Attacker', 1)
-                                visitors[visitor_id].score_processed = True
-
-                            print(f"[VISITOR KILL] {killer_name} killed Visitor {visitor_id} "
-                                  f"(Visitor kills: {players[killer_name].visitor_kills})")
-
-                            # イベント記録
-                            add_game_event("kill", killer_name, f"Visitor_{visitor_id}",
-                                           extra_info={"target_type": "visitor", "killer_visitor_kills": players[killer_name].visitor_kills})
+                                # イベント記録
+                                add_game_event("kill", killer_uid, f"Visitor_{visitor_id}",
+                                               extra_info={"target_type": "visitor", "killer_visitor_kills": killer_player.visitor_kills})
+                            else:
+                                print(f"[VISITOR KILL ERROR] Killer UID {killer_uid} not found in players")
                 except ValueError:
                     print(f"Invalid visitor ID format: {visitor}")
                     continue
@@ -504,20 +506,24 @@ async def handler(connection):
 
                             # UID導入後はサーバ発行以外のプレイヤーを作成しない
 
-                            # スコア加算とキル数増加
-                            players[shooter_id].increment_score()
-                            # キルタイプを判別してカウンター増加
-                            if isinstance(target_entity, Visitor):
-                                # ビジターキル
-                                players[shooter_id].increment_visitor_kills()
-                                # Attackerによるビジターキル → Attacker陣営スコア加算
-                                shooter_faction = players[shooter_id].faction
-                                if shooter_faction == 'Attacker' or shooter_faction == 'Attack':
-                                    update_faction_score('Attacker', 1)
-                                    target_entity.score_processed = True
-                            elif isinstance(target_entity, Player):
-                                # プレイヤーキル
-                                players[shooter_id].increment_player_kills()
+                            # スコア加算とキル数増加（UIDチェック付き）
+                            if shooter_id in players:
+                                shooter_player = players[shooter_id]
+                                shooter_player.increment_score()
+                                # キルタイプを判別してカウンター増加
+                                if isinstance(target_entity, Visitor):
+                                    # ビジターキル
+                                    shooter_player.increment_visitor_kills()
+                                    # Attackerによるビジターキル → Attacker陣営スコア加算
+                                    shooter_faction = shooter_player.faction
+                                    if shooter_faction == 'Attacker' or shooter_faction == 'Attack':
+                                        update_faction_score('Attacker', 1)
+                                        target_entity.score_processed = True
+                                elif isinstance(target_entity, Player):
+                                    # プレイヤーキル
+                                    shooter_player.increment_player_kills()
+                            else:
+                                print(f"[KILL ERROR] Shooter UID {shooter_id} not found in players during kill processing")
                         # ダメージログ表示とイベント記録
                         if (not after_alive) and before_alive:
                             # キル発生時の詳細ログ
